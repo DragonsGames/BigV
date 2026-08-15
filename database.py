@@ -1,5 +1,6 @@
 import aiosqlite
 
+
 async def setup_database():
     async with aiosqlite.connect("BigV.db") as db:
         await db.execute(
@@ -128,3 +129,31 @@ async def delete_pending_verification(
                 AND user_id = ?
                 """,(guild_id,user_id)
             )
+            await db.commit()
+
+async def increment_verification_attempts(
+    guild_id,
+    user_id
+):
+    async with aiosqlite.connect("BigV.db") as db:
+        await db.execute( """
+        UPDATE pending_verifications
+        SET attempts = attempts + 1
+        WHERE guild_id=?
+        AND user_id = ?
+        """,(guild_id,user_id))
+        await db.commit()
+
+async def get_pending_verification(
+    guild_id,
+    user_id
+):
+    async with aiosqlite.connect("BigV.db") as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute( """
+            SELECT * 
+            FROM pending_verifications 
+            WHERE guild_id = ? AND user_id = ?
+            """,(guild_id,user_id))
+            row = await cursor.fetchone()
+    return row

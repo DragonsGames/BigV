@@ -1,5 +1,5 @@
-import os
 import hashlib
+import os
 import secrets
 import time
 
@@ -8,13 +8,16 @@ from discord import app_commands
 from dotenv import load_dotenv
 
 from database import (
-    setup_database,
-    save_guild_settings,
-    get_guild_settings,
-    save_pending_verification,
-    get_pending_verifications,
     delete_pending_verification,
+    get_guild_settings,
+    get_pending_verification,
+    get_pending_verifications,
+    increment_verification_attempts,
+    save_guild_settings,
+    save_pending_verification,
+    setup_database,
 )
+
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -222,10 +225,29 @@ async def verify(
             matched_verification = verification
             break
     if matched_verification is None:
-        await interaction.response.send_message(
-                    "Invalid Code."
+        if len(pending) == 1 :
+            guild_id = pending[0]['guild_id']
+            await increment_verification_attempts(guild_id, user_id)
+            verification = await get_pending_verification(
+            guild_id,
+            user_id
+            )
+            if verification['attempts'] >= 5:
+                await delete_pending_verification(guild_id,user_id)
+                await interaction.response.send_message(
+                        "Too many attempts. Verify again!"
+                    )
+                return
+            remaining = 5 - verification["attempts"]
+            await interaction.response.send_message(
+                    f"Invalid Code. {remaining}/5 attempts left "
                 )
-        return
+            return
+        else:
+            await interaction.response.send_message(
+            "Invalid Code."
+            )
+            return
     if int(time.time()) > matched_verification['expires_at']:
         await interaction.response.send_message(
             "This verification code has expired.\n"
