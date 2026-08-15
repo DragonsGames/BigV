@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
+import ui as bigv_ui
 from database import (
     delete_expired_verifications,
     delete_pending_verification,
@@ -47,10 +48,11 @@ class VerifierClient(discord.Client):
 
     async def setup_hook(self):
         await setup_database()
+        await bigv_ui.load_application_emojis(self)
+        self.add_view(VerifyView())
 
         commands = await self.tree.sync()
         repair_configurations.start()
-        self.add_view(VerifyView())
         cleanup_expired_verifications.start()
         logger.info("Synced %s global command(s).", len(commands))
 
@@ -63,7 +65,32 @@ client = VerifierClient()
     description="Check whether BigV is online."
 )
 async def ping(interaction: discord.Interaction):
-    await interaction.response.send_message("Pong!")
+    await interaction.response.send_message(
+        f"{bigv_ui.emoji('success')} Pong - BigV is online.",
+        allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+    )
+
+
+@client.tree.command(
+    name="help",
+    description="Learn how to set up and use BigV verification."
+)
+async def help_command(interaction: discord.Interaction):
+    logo_file = bigv_ui.brand_logo_file()
+    embed = bigv_ui.help_embed(interaction.guild, logo_file)
+    if logo_file is None:
+        await interaction.response.send_message(
+            embed=embed,
+            ephemeral=interaction.guild is not None,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+        return
+    await interaction.response.send_message(
+        embed=embed,
+        file=logo_file,
+        ephemeral=interaction.guild is not None,
+        allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+    )
 
 
 @tasks.loop(hours=1)
@@ -73,65 +100,100 @@ async def cleanup_expired_verifications():
     logger.info("Cleaned expired verification challenges.")
 
 
-class VerifyView(discord.ui.View):
+class VerifyActionRow(discord.ui.ActionRow):
     def __init__(self):
-        super().__init__(timeout=None)
-    
+        super().__init__()
+        self.verify_button.emoji = bigv_ui.emoji("verify")
+
     @discord.ui.button(
-    label="Verify",
-    emoji="✅",
-    style=discord.ButtonStyle.green,
-    custom_id="bigv_verify"
+        label="Send verification code",
+        style=discord.ButtonStyle.primary,
+        custom_id="bigv_verify"
     )
     async def verify_button(
-            self,
-            interaction: discord.Interaction,
-            button: discord.ui.Button
-        ):
-            number = secrets.randbelow(1_000_000)
-            code = f"{number:06d}"
-            code_hash = hashlib.sha256(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button
+    ):
+        number = secrets.randbelow(1_000_000)
+        code = f"{number:06d}"
+        code_hash = hashlib.sha256(
             code.encode()
-            ).hexdigest()
-            expires_at = int(time.time()) + 600
-            guild_id = interaction.guild.id
-            user_id = interaction.user.id
-            await save_pending_verification(
-                guild_id,
-                user_id,
-                code_hash,
-                expires_at,
+        ).hexdigest()
+        expires_at = int(time.time()) + 600
+        guild_id = interaction.guild.id
+        user_id = interaction.user.id
+        await save_pending_verification(
+            guild_id,
+            user_id,
+            code_hash,
+            expires_at,
+        )
+        try:
+            await interaction.user.send(
+                embed=bigv_ui.verification_dm_embed(
+                    interaction.guild,
+                    code,
+                    expires_at,
+                ),
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
-            try :
-                await interaction.user.send(
-                    "BigV Verification\n\n\n"
-                    "Your verification code is:   "
-                    f"||{code}||\n\n"
-                    "It expires in 10 minutes.\n\n"
-                    "Use:"
-                    f"**   /verify ||{code}||**\n\n"
-                )
-            except discord.Forbidden:
-                logger.warning(
-                    "Could not send verification DM for guild %s user %s",
-                    guild_id,
-                    user_id
-                )
-                await delete_pending_verification(guild_id,user_id)
-                await interaction.response.send_message(
-                    "I couldn't send you a DM.\n"
-                    "Enable DMs for this server and try again.",
-                    ephemeral=True
-                )
-                return
+        except discord.Forbidden:
+            logger.warning(
+                "Could not send verification DM for guild %s user %s",
+                guild_id,
+                user_id
+            )
+            await delete_pending_verification(guild_id, user_id)
             await interaction.response.send_message(
-                "Verification code sent. Check your DMs.",
-                ephemeral=True
-                )
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "I couldn't reach your DMs",
+                    "Enable direct messages for this server, then press **Verify** again.",
+                    interaction.guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+            )
+            return
+        await interaction.response.send_message(
+            f"{bigv_ui.emoji('success')} Code sent - check your DMs.",
+            ephemeral=True,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+
+
+class VerifyView(discord.ui.LayoutView):
+    def __init__(self, guild=None, role=None, logo_file=None):
+        super().__init__(timeout=None)
+        action_row = VerifyActionRow()
+        self.add_item(
+            bigv_ui.verification_panel(
+                guild,
+                role,
+                action_row,
+                logo_file,
+            )
+        )
+
+
+async def send_verification_panel(guild, channel, role):
+    logo_file = bigv_ui.brand_logo_file()
+    view = VerifyView(guild, role, logo_file)
+    if logo_file is None:
+        return await channel.send(
+            view=view,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+    return await channel.send(
+        view=view,
+        file=logo_file,
+        allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+    )
             
 @client.tree.command(
     name="setup",
-    description="setup server settings."
+    description="Configure BigV verification for this server."
 )
 @app_commands.guild_only()
 @app_commands.default_permissions(administrator=True)
@@ -153,8 +215,14 @@ async def setup(
                 guild_id
             )
             await interaction.response.send_message(
-            "BigV doesn't have Manage Roles permission !",
-            ephemeral=True
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "Manage Roles is required",
+                    "Give BigV the **Manage Roles** permission, then run `/setup` again.",
+                    guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
         
@@ -164,8 +232,14 @@ async def setup(
                 guild_id
             )
             await interaction.response.send_message(
-            "BigV doesn't have Manage Channels permission !",
-            ephemeral=True
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "Manage Channels is required",
+                    "Give BigV the **Manage Channels** permission, then run `/setup` again.",
+                    guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
         if not bot_member.guild_permissions.manage_messages:
@@ -174,8 +248,14 @@ async def setup(
                 guild_id
             )
             await interaction.response.send_message(
-            "BigV doesn't have Manage Messages permission !",
-            ephemeral=True
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "Manage Messages is required",
+                    "Give BigV the **Manage Messages** permission, then run `/setup` again.",
+                    guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
 
@@ -195,9 +275,14 @@ async def setup(
                     reason="BigV setup rollback"
                 )
                 await interaction.response.send_message(
-                    "BigV cant Assign Roles!❌\n"
-                    "**-**BigV's role must be above Verified",
-                    ephemeral=True
+                    embed=bigv_ui.status_embed(
+                        "warning",
+                        "The Verified role is out of reach",
+                        "Move BigV's highest role above **Verified**, then run `/setup` again.",
+                        guild,
+                    ),
+                    ephemeral=True,
+                    allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
                     )
                 return
             
@@ -206,9 +291,10 @@ async def setup(
                 reason=f"BigV setup requested by {interaction.user}"
             )
             await lock_verification_channel(guild, verification_channel)
-            verification_message = await verification_channel.send(
-                "Click below to begin verification.",
-                view=VerifyView()
+            verification_message = await send_verification_panel(
+                guild,
+                verification_channel,
+                role,
             )
             client.verification_channels.add(verification_channel.id)
             await  save_guild_settings(
@@ -247,20 +333,51 @@ async def setup(
                         guild_id
                     )
                     pass
-            await interaction.response.send_message("Setup Failed try again!",ephemeral=True)
+            await interaction.response.send_message(
+                embed=bigv_ui.status_embed(
+                    "error",
+                    "Setup couldn't be completed",
+                    "Check BigV's server permissions and role position, then run `/setup` again.",
+                    guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+            )
             return
             
 
         await interaction.response.send_message(
-            f"Created Role:{role.mention}\n"
-            f"Verification Channel :{verification_channel.mention}\n"
-            f"Verification message ID : {verification_message.id}\n",
-            ephemeral=True
+            embed=bigv_ui.status_embed(
+                "success",
+                "BigV is ready",
+                (
+                    f"{bigv_ui.emoji('channel')} {verification_channel.mention} is locked and ready.\n"
+                    f"{bigv_ui.emoji('role')} Members verify there to receive {role.mention}."
+                ),
+                guild,
+            ),
+            ephemeral=True,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
     else:
+        verification_channel = guild.get_channel(settings["verified_channel_id"])
+        channel_text = (
+            verification_channel.mention
+            if verification_channel is not None
+            else "the verification channel"
+        )
         await interaction.response.send_message(
-            "BigV is already configured in this server.",
-            ephemeral=True
+            embed=bigv_ui.status_embed(
+                "neutral",
+                "BigV is already configured",
+                (
+                    f"{bigv_ui.emoji('channel')} Members can use {channel_text} to "
+                    f"verify in **{bigv_ui.guild_name(guild)}**."
+                ),
+                guild,
+            ),
+            ephemeral=True,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
 
 @setup.error
@@ -274,7 +391,16 @@ async def setup_error(
             interaction.user.id,
             interaction.guild_id
         )
-        await interaction.response.send_message("You need Administrator permission to configure BigV.",ephemeral=True)
+        await interaction.response.send_message(
+            embed=bigv_ui.status_embed(
+                "warning",
+                "Administrator permission is required",
+                "Ask a server administrator to run `/setup` for BigV.",
+                interaction.guild,
+            ),
+            ephemeral=True,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
         return
     raise error
 
@@ -282,6 +408,7 @@ async def setup_error(
     name="verify",
     description="Submit your BigV verification code."
 )
+@app_commands.describe(code="The private six-digit code BigV sent by DM.")
 @app_commands.dm_only()
 async def verify(
     interaction: discord.Interaction,
@@ -291,7 +418,12 @@ async def verify(
     pending = await get_pending_verifications(user_id)
     if not pending:
         await interaction.response.send_message(
-            "You don't have any pending verification requests."
+            embed=bigv_ui.status_embed(
+                "neutral",
+                "No verification is waiting",
+                "Return to the server's verification channel and press **Verify** first.",
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
     submitted_hash = hashlib.sha256(
@@ -313,24 +445,43 @@ async def verify(
             if verification['attempts'] >= 5:
                 await delete_pending_verification(guild_id,user_id)
                 await interaction.response.send_message(
-                        "Too many attempts. Verify again!"
-                    )
+                    embed=bigv_ui.status_embed(
+                        "warning",
+                        "Too many incorrect attempts",
+                        "This request was cancelled. Return to the server and press **Verify** for a new code.",
+                    ),
+                    allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+                )
                 return
             remaining = 5 - verification["attempts"]
             await interaction.response.send_message(
-                    f"Invalid Code. {remaining}/5 attempts left "
-                )
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "That code isn't correct",
+                    f"Check the latest BigV DM and try again. **{remaining} of 5 attempts remain.**",
+                ),
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+            )
             return
         else:
             await interaction.response.send_message(
-            "Invalid Code."
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "That code doesn't match",
+                    "You have requests from multiple servers. Use the code from the DM for the server you want to join.",
+                ),
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
     if int(time.time()) > matched_verification['expires_at']:
         await delete_pending_verification(matched_verification["guild_id"],user_id)
         await interaction.response.send_message(
-            "This verification code has expired.\n"
-            "Click Verify again to get a new one."
+            embed=bigv_ui.status_embed(
+                "warning",
+                "This code has expired",
+                "Return to the server's verification channel and press **Verify** for a new code.",
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
     guild_id = matched_verification["guild_id"]
@@ -344,7 +495,12 @@ async def verify(
         )
         await delete_pending_verification(guild_id, user_id)
         await interaction.response.send_message(
-            "That server is no longer available."
+            embed=bigv_ui.status_embed(
+                "error",
+                "That server is unavailable",
+                "BigV can no longer access the server for this request. Start again from a server where BigV is active.",
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
 
@@ -358,7 +514,13 @@ async def verify(
             user_id
         )
         await interaction.response.send_message(
-            "BigV couldn't prepare this server for verification. Please try again later."
+            embed=bigv_ui.status_embed(
+                "error",
+                "The server isn't ready yet",
+                "BigV couldn't prepare the verification setup. Your code is still valid, so try again shortly.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
 
@@ -375,14 +537,26 @@ async def verify(
         )
         await delete_pending_verification(guild_id, user_id)
         await interaction.response.send_message(
-            "You are no longer a member of that server."
+            embed=bigv_ui.status_embed(
+                "warning",
+                "You're no longer in that server",
+                f"Rejoin **{bigv_ui.guild_name(guild)}**, then start verification again.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
 
     if role in member.roles:
         await delete_pending_verification(guild_id, user_id)
         await interaction.response.send_message(
-        f"You are already verified in **{guild.name}**. ✅"
+            embed=bigv_ui.status_embed(
+                "success",
+                "You're already verified",
+                f"You already have access to **{bigv_ui.guild_name(guild)}**.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
     if not role.is_assignable():
@@ -392,8 +566,13 @@ async def verify(
             guild_id
         )
         await interaction.response.send_message(
-            "BigV can't assign the Verified role.\n"
-            "An administrator must move BigV's role above Verified."
+            embed=bigv_ui.status_embed(
+                "warning",
+                "The Verified role is out of reach",
+                "A server administrator needs to move BigV's highest role above **Verified**. Your code remains valid.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
 
@@ -410,13 +589,24 @@ async def verify(
             user_id
         )
         await interaction.response.send_message(
-            "BigV couldn't assign the Verified role. Please try again."
+            embed=bigv_ui.status_embed(
+                "error",
+                "The role couldn't be assigned",
+                f"BigV couldn't finish verification in **{bigv_ui.guild_name(guild)}**. Your code remains valid; try again shortly.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
         )
         return
     await delete_pending_verification(guild_id,user_id)
     await interaction.response.send_message(
-    f"Verification successful ✅\n"
-    f"You are now verified in **{guild.name}**."
+        embed=bigv_ui.status_embed(
+            "success",
+            "Verification complete",
+            f"You now have verified access to **{bigv_ui.guild_name(guild)}**.",
+            guild,
+        ),
+        allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
     )
 
 
@@ -446,9 +636,10 @@ async def repair_guild_setup(guild):
         message_id = None
     await lock_verification_channel(guild, channel)
     if message_id is None:
-        verification_message = await channel.send(
-        "Click below to begin verification.",
-        view=VerifyView()
+        verification_message = await send_verification_panel(
+            guild,
+            channel,
+            role,
         )
     else:
         try:
@@ -456,9 +647,10 @@ async def repair_guild_setup(guild):
             message_id
             )
         except discord.NotFound:
-            verification_message = await channel.send(
-                "Click below to begin verification.",
-                view=VerifyView()
+            verification_message = await send_verification_panel(
+                guild,
+                channel,
+                role,
             )
     client.verification_channels.add(channel.id)
     await  save_guild_settings(
