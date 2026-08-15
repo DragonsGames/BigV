@@ -35,11 +35,13 @@ class VerifierClient(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
+        self.verification_channels = set()
 
     async def setup_hook(self):
         await setup_database()
 
         commands = await self.tree.sync()
+        repair_configurations.start()
         self.add_view(VerifyView())
         cleanup_expired_verifications.start()
         print(f"Synced {len(commands)} global command(s).")
@@ -121,12 +123,8 @@ class VerifyView(discord.ui.View):
 @app_commands.guild_only()
 @app_commands.default_permissions(administrator=True)
 @app_commands.checks.has_permissions(administrator=True)
-@app_commands.describe(
-    verification_channel="Choose the verification channel",
-)
 async def setup(
-    interaction: discord.Interaction,
-    verification_channel: discord.TextChannel,
+    interaction: discord.Interaction
 ):
     guild_id=interaction.guild.id
     guild = interaction.guild
@@ -134,7 +132,6 @@ async def setup(
     if  settings is None:
         ## Error Handling For permissions 
         bot_member = guild.me
-        channel_permissions = verification_channel.permissions_for(bot_member)
         if not bot_member.guild_permissions.manage_roles:
             await interaction.response.send_message(
             "BigV doesn't have Manage Roles permission !",
@@ -142,21 +139,15 @@ async def setup(
             )
             return
         
-        if not channel_permissions.view_channel:
+        if not bot_member.guild_permissions.manage_channels:
             await interaction.response.send_message(
-            "BigV cant view that channel ! ❌",
+            "BigV doesn't have Manage Channels permission !",
             ephemeral=True
             )
             return
-        if not channel_permissions.send_messages:
+        if not bot_member.guild_permissions.manage_messages:
             await interaction.response.send_message(
-            "BigV cant send messages in that channel !❌",
-            ephemeral=True
-            )
-            return
-        if not channel_permissions.embed_links:
-            await interaction.response.send_message(
-            "BigV cant Embed messages in that channel !❌",
+            "BigV doesn't have Manage Messages permission !",
             ephemeral=True
             )
             return
@@ -177,10 +168,16 @@ async def setup(
                 )
             return
         
+        verification_channel = await guild.create_text_channel(
+            "bigv-verification",
+            reason=f"BigV setup requested by {interaction.user}"
+        )
+        await lock_verification_channel(guild, verification_channel)
         verification_message = await verification_channel.send(
             "Click below to begin verification.",
             view=VerifyView()
         )
+        client.verification_channels.add(verification_channel.id)
         await  save_guild_settings(
             guild_id,
             role.id,
@@ -268,6 +265,7 @@ async def verify(
 
     guild = client.get_guild(guild_id)
 
+    await repair_guild_setup(guild)
     settings = await get_guild_settings(guild_id)
 
     role_id = settings["verified_role_id"]
@@ -299,6 +297,147 @@ async def verify(
     f"You are now verified in **{guild.name}**."
     )
 
+
+## Repair Role
+async def repair_guild_setup(guild):
+    settings = await get_guild_settings(guild.id)
+    
+    if settings is None:
+        return
+    message_id = settings["verification_message_id"]
+    role = guild.get_role(settings["verified_role_id"])
+
+    if role is None:
+        role = await guild.create_role(
+                name="Verified",
+                permissions=discord.Permissions.none(),
+                reason="BigV Auto repair"
+            )
+    channel = guild.get_channel(
+    settings["verified_channel_id"]
+    ) 
+    if channel is None:
+        channel = await guild.create_text_channel(
+        "bigv-verification",
+        reason="BigV auto repair: verification channel missing"
+        )
+        message_id = None
+    await lock_verification_channel(guild, channel)
+    if message_id is None:
+        verification_message = await channel.send(
+        "Click below to begin verification.",
+        view=VerifyView()
+        )
+    else:
+        try:
+            verification_message = await channel.fetch_message(
+            message_id
+            )
+        except discord.NotFound:
+            verification_message = await channel.send(
+                "Click below to begin verification.",
+                view=VerifyView()
+            )
+    client.verification_channels.add(channel.id)
+    await  save_guild_settings(
+        guild.id,
+        role.id,
+        channel.id,
+        verification_message.id
+    )
+
+
+##Verification Message Deletion detecter
+@client.event
+async def on_raw_message_delete(payload):
+    if payload.guild_id is None:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    settings = await get_guild_settings(payload.guild_id)
+    if settings is None:
+        return
+    if payload.message_id != settings["verification_message_id"]:
+        return
+    await repair_guild_setup(guild)
+
+
+@client.event
+async def on_raw_bulk_message_delete(payload):
+    if payload.guild_id is None:
+        return
+    guild = client.get_guild(payload.guild_id)
+    if guild is None:
+        return
+    settings = await get_guild_settings(payload.guild_id)
+    if settings is None:
+        return
+    if settings["verification_message_id"] not in payload.message_ids:
+        return
+    await repair_guild_setup(guild)
+
+
+## Role Deletion detection 
+@client.event
+async def on_guild_role_delete(role):
+    settings = await get_guild_settings(role.guild.id)
+    if settings is None:
+        return
+    if role.id == settings["verified_role_id"] :
+        await repair_guild_setup(role.guild)
+
+#delete anything else but bots message 
+@client.event
+async def on_message(message):
+    if message.guild is None:
+            return
+    if message.author == client.user:
+        return
+    if message.channel.id not in client.verification_channels:
+        return
+    await message.delete()
+#missing event: detect channel deletion
+@client.event
+async def on_guild_channel_delete(channel):
+    settings = await get_guild_settings(channel.guild.id)
+    if not settings :
+        return
+    if channel.id != settings["verified_channel_id"]:
+        return
+    client.verification_channels.discard(channel.id)
+    await repair_guild_setup(channel.guild)
+
+#channel lock helper
+async def lock_verification_channel(guild, channel):
+    overwrite = channel.overwrites_for(
+    guild.default_role)
+    overwrite.view_channel = True
+    overwrite.send_messages = False
+    bot_overwrite = channel.overwrites_for(guild.me)
+    bot_overwrite.view_channel = True
+    bot_overwrite.send_messages = True
+    bot_overwrite.embed_links = True
+    bot_overwrite.read_message_history = True
+    bot_overwrite.manage_messages = True
+    await channel.set_permissions(
+    guild.default_role,
+    overwrite=overwrite,
+    reason="BigV verification channel lockdown"
+)
+    await channel.set_permissions(
+    guild.me,
+    overwrite=bot_overwrite,
+    reason="BigV verification channel lockdown"
+)
+
+@tasks.loop(minutes=5)
+async def repair_configurations():
+    for guild in client.guilds:
+        await repair_guild_setup(guild)
+@repair_configurations.before_loop
+async def before_repair_configurations():
+    await client.wait_until_ready()
 @client.event
 async def on_ready():
     print(f"Logged in as {client.user}")
