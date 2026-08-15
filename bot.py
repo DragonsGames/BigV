@@ -80,18 +80,28 @@ class VerifyView(discord.ui.View):
                 code_hash,
                 expires_at,
             )
-            await interaction.user.send(
-                "BigV Verification\n\n\n"
-                "Your verification code is:   "
-                f"||{code}||\n\n"
-                "It expires in 10 minutes.\n\n"
-                "Use:"
-                f"**   /verify ||{code}||**\n\n"
-            )
+            try :
+                await interaction.user.send(
+                    "BigV Verification\n\n\n"
+                    "Your verification code is:   "
+                    f"||{code}||\n\n"
+                    "It expires in 10 minutes.\n\n"
+                    "Use:"
+                    f"**   /verify ||{code}||**\n\n"
+                )
+            except discord.Forbidden:
+                await delete_pending_verification(guild_id,user_id)
+                await interaction.response.send_message(
+                    "I couldn't send you a DM.\n"
+                    "Enable DMs for this server and try again.",
+                    ephemeral=True
+                )
+                return
             await interaction.response.send_message(
                 "Verification code sent. Check your DMs.",
                 ephemeral=True
                 )
+            
 @client.tree.command(
     name="setup",
     description="setup server settings."
@@ -146,6 +156,15 @@ async def setup(
                 permissions=discord.Permissions.none(),
                 reason=f"BigV setup requested by {interaction.user}"
             )
+
+        if not role.is_assignable():
+            await interaction.response.send_message(
+                "BigV cant Assign Roles!❌\n"
+                "**-**BigV's role must be above Verified",
+                ephemeral=True
+                )
+            return
+        
         verification_message = await verification_channel.send(
             "Click below to begin verification.",
             view=VerifyView()
@@ -224,6 +243,19 @@ async def verify(
     role = guild.get_role(role_id)
 
     member = await guild.fetch_member(user_id)
+
+    if role in member.roles:
+        await delete_pending_verification(guild_id, user_id)
+        await interaction.response.send_message(
+        f"You are already verified in **{guild.name}**. ✅"
+        )
+        return
+    if not role.is_assignable():
+        await interaction.response.send_message(
+            "BigV can't assign the Verified role.\n"
+            "An administrator must move BigV's role above Verified."
+        )
+        return
 
     await member.add_roles(
     role,
