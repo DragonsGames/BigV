@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import secrets
 import time
@@ -20,6 +21,12 @@ from database import (
     save_pending_verification,
     setup_database,
 )
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger("bigv")
 
 load_dotenv()
 
@@ -45,7 +52,7 @@ class VerifierClient(discord.Client):
         repair_configurations.start()
         self.add_view(VerifyView())
         cleanup_expired_verifications.start()
-        print(f"Synced {len(commands)} global command(s).")
+        logger.info("Synced %s global command(s).", len(commands))
 
 
 client = VerifierClient()
@@ -63,7 +70,7 @@ async def ping(interaction: discord.Interaction):
 async def cleanup_expired_verifications():
     current_time = int(time.time())
     await delete_expired_verifications(current_time)
-    print("Cleaned expired verification challenges.")
+    logger.info("Cleaned expired verification challenges.")
 
 
 class VerifyView(discord.ui.View):
@@ -105,6 +112,11 @@ class VerifyView(discord.ui.View):
                     f"**   /verify ||{code}||**\n\n"
                 )
             except discord.Forbidden:
+                logger.warning(
+                    "Could not send verification DM for guild %s user %s",
+                    guild_id,
+                    user_id
+                )
                 await delete_pending_verification(guild_id,user_id)
                 await interaction.response.send_message(
                     "I couldn't send you a DM.\n"
@@ -136,6 +148,10 @@ async def setup(
         ## Error Handling For permissions 
         bot_member = guild.me
         if not bot_member.guild_permissions.manage_roles:
+            logger.warning(
+                "Setup blocked for guild %s: BigV lacks Manage Roles",
+                guild_id
+            )
             await interaction.response.send_message(
             "BigV doesn't have Manage Roles permission !",
             ephemeral=True
@@ -143,12 +159,20 @@ async def setup(
             return
         
         if not bot_member.guild_permissions.manage_channels:
+            logger.warning(
+                "Setup blocked for guild %s: BigV lacks Manage Channels",
+                guild_id
+            )
             await interaction.response.send_message(
             "BigV doesn't have Manage Channels permission !",
             ephemeral=True
             )
             return
         if not bot_member.guild_permissions.manage_messages:
+            logger.warning(
+                "Setup blocked for guild %s: BigV lacks Manage Messages",
+                guild_id
+            )
             await interaction.response.send_message(
             "BigV doesn't have Manage Messages permission !",
             ephemeral=True
@@ -163,6 +187,10 @@ async def setup(
                     reason=f"BigV setup requested by {interaction.user}"
                 )
             if not role.is_assignable():
+                logger.warning(
+                    "Setup blocked for guild %s: Verified role is not assignable",
+                    guild_id
+                )
                 await role.delete(
                     reason="BigV setup rollback"
                 )
@@ -190,6 +218,10 @@ async def setup(
                 verification_message.id
             )
         except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+            logger.exception(
+                "Setup failed for guild %s; rolling back",
+                guild_id
+            )
             if verification_channel is not None:
                 client.verification_channels.discard(verification_channel.id)
                 try:
@@ -197,6 +229,11 @@ async def setup(
                         reason="BigV setup rollback"
                     )
                 except (discord.Forbidden, discord.HTTPException):
+                    logger.exception(
+                        "Failed to delete channel %s during setup rollback for guild %s",
+                        verification_channel.id,
+                        guild_id
+                    )
                     pass
             if role is not None:
                 try:
@@ -204,6 +241,11 @@ async def setup(
                         reason="BigV setup rollback"
                     )
                 except (discord.Forbidden, discord.HTTPException):
+                    logger.exception(
+                        "Failed to delete role %s during setup rollback for guild %s",
+                        role.id,
+                        guild_id
+                    )
                     pass
             await interaction.response.send_message("Setup Failed try again!",ephemeral=True)
             return
@@ -227,6 +269,11 @@ async def setup_error(
     error: app_commands.AppCommandError
 ):
     if isinstance(error, app_commands.MissingPermissions):
+        logger.warning(
+            "Setup denied for user %s in guild %s: administrator permission missing",
+            interaction.user.id,
+            interaction.guild_id
+        )
         await interaction.response.send_message("You need Administrator permission to configure BigV.",ephemeral=True)
         return
     raise error
@@ -290,6 +337,11 @@ async def verify(
 
     guild = client.get_guild(guild_id)
     if guild is None:
+        logger.warning(
+            "Verification guild %s is unavailable for user %s",
+            guild_id,
+            user_id
+        )
         await delete_pending_verification(guild_id, user_id)
         await interaction.response.send_message(
             "That server is no longer available."
@@ -300,6 +352,11 @@ async def verify(
         await repair_guild_setup(guild)
         settings = await get_guild_settings(guild_id)
     except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        logger.exception(
+            "Failed to prepare guild %s for verification by user %s",
+            guild_id,
+            user_id
+        )
         await interaction.response.send_message(
             "BigV couldn't prepare this server for verification. Please try again later."
         )
@@ -311,6 +368,11 @@ async def verify(
     try:
         member = await guild.fetch_member(user_id)
     except discord.NotFound:
+        logger.warning(
+            "Verification user %s is not a member of guild %s",
+            user_id,
+            guild_id
+        )
         await delete_pending_verification(guild_id, user_id)
         await interaction.response.send_message(
             "You are no longer a member of that server."
@@ -324,6 +386,11 @@ async def verify(
         )
         return
     if not role.is_assignable():
+        logger.warning(
+            "Verification role %s is not assignable in guild %s",
+            role.id,
+            guild_id
+        )
         await interaction.response.send_message(
             "BigV can't assign the Verified role.\n"
             "An administrator must move BigV's role above Verified."
@@ -336,6 +403,12 @@ async def verify(
         reason="BigV verification completed"
         )
     except (discord.Forbidden, discord.HTTPException):
+        logger.exception(
+            "Failed to assign verification role %s in guild %s to user %s",
+            role.id,
+            guild_id,
+            user_id
+        )
         await interaction.response.send_message(
             "BigV couldn't assign the Verified role. Please try again."
         )
@@ -412,6 +485,10 @@ async def on_raw_message_delete(payload):
             return
         await repair_guild_setup(guild)
     except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        logger.exception(
+            "Failed to repair verification message after deletion for guild %s",
+            guild.id
+        )
         pass
 
 
@@ -430,6 +507,10 @@ async def on_raw_bulk_message_delete(payload):
             return
         await repair_guild_setup(guild)
     except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        logger.exception(
+            "Failed to repair verification message after bulk deletion for guild %s",
+            guild.id
+        )
         pass
 
 
@@ -443,6 +524,10 @@ async def on_guild_role_delete(role):
         if role.id == settings["verified_role_id"] :
             await repair_guild_setup(role.guild)
     except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        logger.exception(
+            "Failed to repair configuration after role deletion for guild %s",
+            role.guild.id
+        )
         pass
 
 #delete anything else but bots message 
@@ -457,6 +542,11 @@ async def on_message(message):
     try:
         await message.delete()
     except (discord.Forbidden, discord.HTTPException):
+        logger.exception(
+            "Failed to delete unauthorized message in verification channel %s for guild %s",
+            message.channel.id,
+            message.guild.id
+        )
         pass
 #missing event: detect channel deletion
 @client.event
@@ -470,6 +560,10 @@ async def on_guild_channel_delete(channel):
         client.verification_channels.discard(channel.id)
         await repair_guild_setup(channel.guild)
     except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        logger.exception(
+            "Failed to repair configuration after channel deletion for guild %s",
+            channel.guild.id
+        )
         pass
 
 #channel lock helper
@@ -501,13 +595,18 @@ async def repair_configurations():
         try:
             await repair_guild_setup(guild)
         except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+            logger.exception(
+                "Periodic configuration repair failed for guild %s",
+                guild.id
+            )
             continue
 @repair_configurations.before_loop
 async def before_repair_configurations():
     await client.wait_until_ready()
 @client.event
 async def on_ready():
-    print(f"Logged in as {client.user}")
+    logger.info("Logged in as %s", client.user)
 
 
+logger.info("Starting BigV")
 client.run(TOKEN)
