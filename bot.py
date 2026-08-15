@@ -5,9 +5,11 @@ import time
 
 import discord
 from discord import app_commands
+from discord.ext import tasks
 from dotenv import load_dotenv
 
 from database import (
+    delete_expired_verifications,
     delete_pending_verification,
     get_guild_settings,
     get_pending_verification,
@@ -39,6 +41,7 @@ class VerifierClient(discord.Client):
 
         commands = await self.tree.sync()
         self.add_view(VerifyView())
+        cleanup_expired_verifications.start()
         print(f"Synced {len(commands)} global command(s).")
 
 
@@ -52,6 +55,12 @@ client = VerifierClient()
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
 
+
+@tasks.loop(hours=1)
+async def cleanup_expired_verifications():
+    current_time = int(time.time())
+    await delete_expired_verifications(current_time)
+    print("Cleaned expired verification challenges.")
 
 
 class VerifyView(discord.ui.View):
@@ -249,6 +258,7 @@ async def verify(
             )
             return
     if int(time.time()) > matched_verification['expires_at']:
+        await delete_pending_verification(matched_verification["guild_id"],user_id)
         await interaction.response.send_message(
             "This verification code has expired.\n"
             "Click Verify again to get a new one."

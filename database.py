@@ -157,3 +157,10 @@ async def get_pending_verification(
             """,(guild_id,user_id))
             row = await cursor.fetchone()
     return row
+
+async def delete_expired_verifications(current_time):
+    async with aiosqlite.connect("BigV.db") as db:
+        await db.execute("""
+                DELETE FROM pending_verifications 
+                WHERE expires_at<?""",(current_time,))
+        await db.commit()
