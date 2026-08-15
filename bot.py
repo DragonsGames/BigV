@@ -48,6 +48,9 @@ client = VerifierClient()
 )
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
+
+
+
 class VerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -107,6 +110,37 @@ async def setup(
     guild = interaction.guild
     settings = await get_guild_settings(guild_id)
     if  settings is None:
+        ## Error Handling For permissions 
+        bot_member = guild.me
+        channel_permissions = verification_channel.permissions_for(bot_member)
+        if not bot_member.guild_permissions.manage_roles:
+            await interaction.response.send_message(
+            "BigV doesn't have Manage Roles permission !",
+            ephemeral=True
+            )
+            return
+        
+        if not channel_permissions.view_channel:
+            await interaction.response.send_message(
+            "BigV cant view that channel ! ❌",
+            ephemeral=True
+            )
+            return
+        if not channel_permissions.send_messages:
+            await interaction.response.send_message(
+            "BigV cant send messages in that channel !❌",
+            ephemeral=True
+            )
+            return
+        if not channel_permissions.embed_links:
+            await interaction.response.send_message(
+            "BigV cant Embed messages in that channel !❌",
+            ephemeral=True
+            )
+            return
+
+
+        
         role = await guild.create_role(
                 name="Verified",
                 permissions=discord.Permissions.none(),
@@ -133,6 +167,17 @@ async def setup(
             "BigV is already configured in this server.",
             ephemeral=True
         )
+
+@setup.error
+async def setup_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError
+):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("You need Administrator permission to configure BigV.",ephemeral=True)
+        return
+    raise error
+
 @client.tree.command(
     name="verify",
     description="Submit your BigV verification code."
