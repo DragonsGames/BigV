@@ -3,6 +3,7 @@ import os
 import secrets
 import time
 
+import aiosqlite
 import discord
 from discord import app_commands
 from discord.ext import tasks
@@ -129,6 +130,8 @@ async def setup(
     guild_id=interaction.guild.id
     guild = interaction.guild
     settings = await get_guild_settings(guild_id)
+    role = None
+    verification_channel = None
     if  settings is None:
         ## Error Handling For permissions 
         bot_member = guild.me
@@ -152,38 +155,60 @@ async def setup(
             )
             return
 
-
-        
-        role = await guild.create_role(
-                name="Verified",
-                permissions=discord.Permissions.none(),
+        try:
+            
+            role = await guild.create_role(
+                    name="Verified",
+                    permissions=discord.Permissions.none(),
+                    reason=f"BigV setup requested by {interaction.user}"
+                )
+            if not role.is_assignable():
+                await role.delete(
+                    reason="BigV setup rollback"
+                )
+                await interaction.response.send_message(
+                    "BigV cant Assign Roles!❌\n"
+                    "**-**BigV's role must be above Verified",
+                    ephemeral=True
+                    )
+                return
+            
+            verification_channel = await guild.create_text_channel(
+                "bigv-verification",
                 reason=f"BigV setup requested by {interaction.user}"
             )
-
-        if not role.is_assignable():
-            await interaction.response.send_message(
-                "BigV cant Assign Roles!❌\n"
-                "**-**BigV's role must be above Verified",
-                ephemeral=True
-                )
+            await lock_verification_channel(guild, verification_channel)
+            verification_message = await verification_channel.send(
+                "Click below to begin verification.",
+                view=VerifyView()
+            )
+            client.verification_channels.add(verification_channel.id)
+            await  save_guild_settings(
+                guild_id,
+                role.id,
+                verification_channel.id,
+                verification_message.id
+            )
+        except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+            if verification_channel is not None:
+                client.verification_channels.discard(verification_channel.id)
+                try:
+                    await verification_channel.delete(
+                        reason="BigV setup rollback"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            if role is not None:
+                try:
+                    await role.delete(
+                        reason="BigV setup rollback"
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+            await interaction.response.send_message("Setup Failed try again!",ephemeral=True)
             return
-        
-        verification_channel = await guild.create_text_channel(
-            "bigv-verification",
-            reason=f"BigV setup requested by {interaction.user}"
-        )
-        await lock_verification_channel(guild, verification_channel)
-        verification_message = await verification_channel.send(
-            "Click below to begin verification.",
-            view=VerifyView()
-        )
-        client.verification_channels.add(verification_channel.id)
-        await  save_guild_settings(
-            guild_id,
-            role.id,
-            verification_channel.id,
-            verification_message.id
-        )
+            
+
         await interaction.response.send_message(
             f"Created Role:{role.mention}\n"
             f"Verification Channel :{verification_channel.mention}\n"
@@ -264,15 +289,33 @@ async def verify(
     guild_id = matched_verification["guild_id"]
 
     guild = client.get_guild(guild_id)
+    if guild is None:
+        await delete_pending_verification(guild_id, user_id)
+        await interaction.response.send_message(
+            "That server is no longer available."
+        )
+        return
 
-    await repair_guild_setup(guild)
-    settings = await get_guild_settings(guild_id)
+    try:
+        await repair_guild_setup(guild)
+        settings = await get_guild_settings(guild_id)
+    except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        await interaction.response.send_message(
+            "BigV couldn't prepare this server for verification. Please try again later."
+        )
+        return
 
     role_id = settings["verified_role_id"]
 
     role = guild.get_role(role_id)
-
-    member = await guild.fetch_member(user_id)
+    try:
+        member = await guild.fetch_member(user_id)
+    except discord.NotFound:
+        await delete_pending_verification(guild_id, user_id)
+        await interaction.response.send_message(
+            "You are no longer a member of that server."
+        )
+        return
 
     if role in member.roles:
         await delete_pending_verification(guild_id, user_id)
@@ -287,10 +330,16 @@ async def verify(
         )
         return
 
-    await member.add_roles(
-    role,
-    reason="BigV verification completed"
-    )
+    try:
+        await member.add_roles(
+        role,
+        reason="BigV verification completed"
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        await interaction.response.send_message(
+            "BigV couldn't assign the Verified role. Please try again."
+        )
+        return
     await delete_pending_verification(guild_id,user_id)
     await interaction.response.send_message(
     f"Verification successful ✅\n"
@@ -355,12 +404,15 @@ async def on_raw_message_delete(payload):
     guild = client.get_guild(payload.guild_id)
     if guild is None:
         return
-    settings = await get_guild_settings(payload.guild_id)
-    if settings is None:
-        return
-    if payload.message_id != settings["verification_message_id"]:
-        return
-    await repair_guild_setup(guild)
+    try:
+        settings = await get_guild_settings(payload.guild_id)
+        if settings is None:
+            return
+        if payload.message_id != settings["verification_message_id"]:
+            return
+        await repair_guild_setup(guild)
+    except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        pass
 
 
 @client.event
@@ -370,22 +422,28 @@ async def on_raw_bulk_message_delete(payload):
     guild = client.get_guild(payload.guild_id)
     if guild is None:
         return
-    settings = await get_guild_settings(payload.guild_id)
-    if settings is None:
-        return
-    if settings["verification_message_id"] not in payload.message_ids:
-        return
-    await repair_guild_setup(guild)
+    try:
+        settings = await get_guild_settings(payload.guild_id)
+        if settings is None:
+            return
+        if settings["verification_message_id"] not in payload.message_ids:
+            return
+        await repair_guild_setup(guild)
+    except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        pass
 
 
 ## Role Deletion detection 
 @client.event
 async def on_guild_role_delete(role):
-    settings = await get_guild_settings(role.guild.id)
-    if settings is None:
-        return
-    if role.id == settings["verified_role_id"] :
-        await repair_guild_setup(role.guild)
+    try:
+        settings = await get_guild_settings(role.guild.id)
+        if settings is None:
+            return
+        if role.id == settings["verified_role_id"] :
+            await repair_guild_setup(role.guild)
+    except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        pass
 
 #delete anything else but bots message 
 @client.event
@@ -396,17 +454,23 @@ async def on_message(message):
         return
     if message.channel.id not in client.verification_channels:
         return
-    await message.delete()
+    try:
+        await message.delete()
+    except (discord.Forbidden, discord.HTTPException):
+        pass
 #missing event: detect channel deletion
 @client.event
 async def on_guild_channel_delete(channel):
-    settings = await get_guild_settings(channel.guild.id)
-    if not settings :
-        return
-    if channel.id != settings["verified_channel_id"]:
-        return
-    client.verification_channels.discard(channel.id)
-    await repair_guild_setup(channel.guild)
+    try:
+        settings = await get_guild_settings(channel.guild.id)
+        if not settings :
+            return
+        if channel.id != settings["verified_channel_id"]:
+            return
+        client.verification_channels.discard(channel.id)
+        await repair_guild_setup(channel.guild)
+    except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+        pass
 
 #channel lock helper
 async def lock_verification_channel(guild, channel):
@@ -434,7 +498,10 @@ async def lock_verification_channel(guild, channel):
 @tasks.loop(minutes=5)
 async def repair_configurations():
     for guild in client.guilds:
-        await repair_guild_setup(guild)
+        try:
+            await repair_guild_setup(guild)
+        except (discord.Forbidden, discord.HTTPException, aiosqlite.Error):
+            continue
 @repair_configurations.before_loop
 async def before_repair_configurations():
     await client.wait_until_ready()
