@@ -1,4 +1,7 @@
 import os
+import hashlib
+import secrets
+import time
 
 import discord
 from discord import app_commands
@@ -8,6 +11,9 @@ from database import (
     setup_database,
     save_guild_settings,
     get_guild_settings,
+    save_pending_verification,
+    get_pending_verifications,
+    delete_pending_verification,
 )
 load_dotenv()
 
@@ -57,12 +63,32 @@ class VerifyView(discord.ui.View):
             interaction: discord.Interaction,
             button: discord.ui.Button
         ):
-            await interaction.response.send_message(
-                f"Verification requested\n"
-                f"User : {interaction.user.mention}\n"
-                f"Server: {interaction.guild.name}\n",
-                ephemeral=True
+            number = secrets.randbelow(1_000_000)
+            code = f"{number:06d}"
+            code_hash = hashlib.sha256(
+            code.encode()
+            ).hexdigest()
+            expires_at = int(time.time()) + 600
+            guild_id = interaction.guild.id
+            user_id = interaction.user.id
+            await save_pending_verification(
+                guild_id,
+                user_id,
+                code_hash,
+                expires_at,
             )
+            await interaction.user.send(
+                "BigV Verification\n\n\n"
+                "Your verification code is:   "
+                f"||{code}||\n\n"
+                "It expires in 10 minutes.\n\n"
+                "Use:"
+                f"**   /verify ||{code}||**\n\n"
+            )
+            await interaction.response.send_message(
+                "Verification code sent. Check your DMs.",
+                ephemeral=True
+                )
 @client.tree.command(
     name="setup",
     description="setup server settings."
@@ -107,6 +133,62 @@ async def setup(
             "BigV is already configured in this server.",
             ephemeral=True
         )
+@client.tree.command(
+    name="verify",
+    description="Submit your BigV verification code."
+)
+@app_commands.dm_only()
+async def verify(
+    interaction: discord.Interaction,
+    code: str
+):
+    user_id = interaction.user.id
+    pending = await get_pending_verifications(user_id)
+    if not pending:
+        await interaction.response.send_message(
+            "You don't have any pending verification requests."
+        )
+        return
+    submitted_hash = hashlib.sha256(
+    code.encode()
+    ).hexdigest()
+    matched_verification = None
+    for verification in pending:
+        if verification["code_hash"] == submitted_hash:
+            matched_verification = verification
+            break
+    if matched_verification is None:
+        await interaction.response.send_message(
+                    "Invalid Code."
+                )
+        return
+    if int(time.time()) > matched_verification['expires_at']:
+        await interaction.response.send_message(
+            "This verification code has expired.\n"
+            "Click Verify again to get a new one."
+        )
+        return
+    guild_id = matched_verification["guild_id"]
+
+    guild = client.get_guild(guild_id)
+
+    settings = await get_guild_settings(guild_id)
+
+    role_id = settings["verified_role_id"]
+
+    role = guild.get_role(role_id)
+
+    member = await guild.fetch_member(user_id)
+
+    await member.add_roles(
+    role,
+    reason="BigV verification completed"
+    )
+    await delete_pending_verification(guild_id,user_id)
+    await interaction.response.send_message(
+    f"Verification successful ✅\n"
+    f"You are now verified in **{guild.name}**."
+    )
 
 @client.event
 async def on_ready():
