@@ -454,7 +454,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
 
 
 class VerificationButtonTests(unittest.IsolatedAsyncioTestCase):
-    async def test_button_stores_hash_and_sends_plain_code_only_in_dm(self):
+    async def test_button_stores_hash_and_sends_code_as_image(self):
         guild = FakeGuild()
         interaction = FakeInteraction(guild=guild)
         save = AsyncMock()
@@ -472,11 +472,33 @@ class VerificationButtonTests(unittest.IsolatedAsyncioTestCase):
         expected_hash = hashlib.sha256(b"001234").hexdigest()
         save.assert_awaited_once_with(guild.id, interaction.user.id, expected_hash, 700)
         dm_embed = interaction.user.send.await_args.kwargs["embed"]
-        dm_text = "\n".join(field.value for field in dm_embed.fields)
+        captcha_file = interaction.user.send.await_args.kwargs["file"]
+
+        dm_text = "\n".join(
+            [dm_embed.title or "", dm_embed.description or ""]
+            + [field.value or "" for field in dm_embed.fields]
+        )
+
         public_text = interaction.response.send_message.await_args.args[0]
-        self.assertIn("001234", dm_text)
+
+        # The real code must no longer appear as readable DM text.
+        self.assertNotIn("001234", dm_text)
         self.assertNotIn("001234", public_text)
+
+        # The code should instead be delivered through the generated image.
+        self.assertEqual(
+            captcha_file.filename,
+            "bigv_verification.png"
+        )
+
+        self.assertEqual(
+            dm_embed.image.url,
+            "attachment://bigv_verification.png"
+        )
+
+        # Database still stores the hash rather than the raw code.
         self.assertNotEqual(expected_hash, "001234")
+
         delete.assert_not_awaited()
 
     async def test_blocked_dm_deletes_pending_challenge(self):

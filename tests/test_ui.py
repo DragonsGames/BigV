@@ -111,7 +111,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             [help_embed.title or "", help_embed.description or ""]
             + [f"{field.name}\n{field.value}" for field in help_embed.fields]
         )
-        dm_embed = ui.verification_dm_embed(guild, "001234", 1893456000)
+        dm_embed = ui.verification_dm_embed(guild, 1893456000)
         dm_text = "\n".join(
             [dm_embed.title or "", dm_embed.description or ""]
             + [f"{field.name}\n{field.value}" for field in dm_embed.fields]

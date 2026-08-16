@@ -7,6 +7,21 @@ BigV is a multi-server Discord verification bot built with **Python**, **discord
 The project started as a learning project after finishing CS50. I wanted to build something larger than a tutorial bot and use it to learn how a real Discord application works: async programming, slash commands, persistent components, permissions, databases, error handling, self-healing behavior, logging, UI/UX, and deployment.
 
 BigV is intended to be **open source** so other developers can inspect it, learn from it, improve it, and adapt it for their own communities.
+---
+
+## Preview
+
+### Verification panel
+
+BigV creates a dedicated verification panel where members can request a private verification code.
+
+![BigV verification panel](docs/screenshots/verification-panel.png)
+
+### Private CAPTCHA verification
+
+The six-digit verification code is rendered as an image and sent privately through Discord DMs.
+
+![BigV CAPTCHA verification DM](docs/screenshots/captcha-dm.png)
 
 ---
 
@@ -464,17 +479,18 @@ You are welcome to:
 
 Please keep attribution and license terms in mind when redistributing the project or included third-party assets.
 
+```markdown
 ### License
 
-Add a repository-level `LICENSE` file before publishing BigV as an open-source release.
+BigV is licensed under the **MIT License**.
 
-For a permissive project like BigV, the **MIT License** is a simple option.
+See [`LICENSE`](LICENSE) for the full license text.
 
-Once the license file exists, this section can be changed to:
+Third-party visual assets may have their own licenses. See:
 
 ```text
-BigV is licensed under the MIT License. See LICENSE for details.
-```
+assets/THIRD_PARTY.md
+assets/licenses/
 
 Third-party visual assets may have their own licenses. See:
 
