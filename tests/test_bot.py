@@ -39,7 +39,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
         ):
             await bot.verify.callback(interaction, "123456")
 
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("No verification", embed.title)
 
     async def test_correct_leading_zero_code_assigns_role_and_consumes_challenge(self):
@@ -73,7 +73,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
             reason="BigV verification completed",
         )
         delete.assert_awaited_once_with(guild.id, interaction.user.id)
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("Verification complete", embed.title)
 
     async def test_wrong_code_increments_attempts(self):
@@ -100,7 +100,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
 
         increment.assert_awaited_once_with(100, interaction.user.id)
         delete.assert_not_awaited()
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("4 of 5 attempts remain", embed.description)
 
     async def test_fifth_wrong_code_deletes_challenge(self):
@@ -128,7 +128,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
             await bot.verify.callback(interaction, "654321")
 
         delete.assert_awaited_once_with(100, interaction.user.id)
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("Too many", embed.title)
 
     async def test_wrong_code_with_multiple_guilds_increments_each_challenge(self):
@@ -159,7 +159,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
             [await_call.args for await_call in increment.await_args_list],
             [(1, interaction.user.id), (2, interaction.user.id)],
         )
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("multiple servers", embed.description)
 
     async def test_multi_guild_wrong_code_removes_challenge_reaching_five_attempts(self):
@@ -227,7 +227,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
             await bot.verify.callback(interaction, "999999")
 
         self.assertEqual(delete.await_count, 2)
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("Too many", embed.title)
         self.assertIn("press **Verify**", embed.description)
         self.assertNotIn("multiple servers", embed.description)
@@ -448,7 +448,7 @@ class VerificationCommandTests(unittest.IsolatedAsyncioTestCase):
         ):
             await bot.verify.callback(interaction, "123456")
 
-        embed = interaction.response.send_message.await_args.kwargs["embed"]
+        embed = interaction.edit_original_response.await_args.kwargs["embed"]
         self.assertIn("try again", embed.description.lower())
         self.assertNotIn("database unavailable", embed.description)
 

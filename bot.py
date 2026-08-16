@@ -1,6 +1,8 @@
 import hashlib
+import io
 import logging
 import os
+import random
 import secrets
 import time
 
@@ -9,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 import ui as bigv_ui
 from database import (
@@ -154,13 +157,18 @@ class VerifyActionRow(discord.ui.ActionRow):
                 allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
+        image_buffer = build_verification_image(code)
+        captcha_file = discord.File(
+            fp=image_buffer,
+            filename="bigv_verification.png"
+        )
         try:
             await interaction.user.send(
                 embed=bigv_ui.verification_dm_embed(
                     guild,
-                    code,
                     expires_at,
                 ),
+                file=captcha_file,
                 allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
         except discord.Forbidden:
@@ -475,6 +483,7 @@ async def verify(
     interaction: discord.Interaction,
     code: str
 ):
+    await interaction.response.defer()
     user_id = interaction.user.id
     try:
         pending = await get_pending_verifications(user_id)
@@ -483,7 +492,7 @@ async def verify(
             "Failed to load pending verifications for user %s",
             user_id
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "error",
                 "Verification data is unavailable",
@@ -493,7 +502,7 @@ async def verify(
         )
         return
     if not pending:
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "neutral",
                 "No verification is waiting",
@@ -529,7 +538,7 @@ async def verify(
                 pending_challenges_remain = True
 
         if not pending_challenges_remain:
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 embed=bigv_ui.status_embed(
                     "warning",
                     "Too many incorrect attempts",
@@ -542,7 +551,7 @@ async def verify(
         if len(updated_verifications) == 1:
             verification = updated_verifications[0]
             remaining = 5 - verification["attempts"]
-            await interaction.response.send_message(
+            await interaction.edit_original_response(
                 embed=bigv_ui.status_embed(
                     "warning",
                     "That code isn't correct",
@@ -551,7 +560,7 @@ async def verify(
                 allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "warning",
                 "That code doesn't match",
@@ -562,7 +571,7 @@ async def verify(
         return
     if int(time.time()) > matched_verification['expires_at']:
         await delete_pending_verification(matched_verification["guild_id"],user_id)
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "warning",
                 "This code has expired",
@@ -581,7 +590,7 @@ async def verify(
             user_id
         )
         await delete_pending_verification(guild_id, user_id)
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "error",
                 "That server is unavailable",
@@ -600,7 +609,7 @@ async def verify(
             guild_id,
             user_id
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "error",
                 "The server isn't ready yet",
@@ -617,7 +626,7 @@ async def verify(
             guild_id,
             user_id
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "error",
                 "The server isn't ready yet",
@@ -638,7 +647,7 @@ async def verify(
             guild_id,
             user_id
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "error",
                 "The server isn't ready yet",
@@ -657,7 +666,7 @@ async def verify(
             guild_id
         )
         await delete_pending_verification(guild_id, user_id)
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "warning",
                 "You're no longer in that server",
@@ -670,7 +679,7 @@ async def verify(
 
     if role in member.roles:
         await delete_pending_verification(guild_id, user_id)
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "success",
                 "You're already verified",
@@ -686,7 +695,7 @@ async def verify(
             role.id,
             guild_id
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "warning",
                 "The Verified role is out of reach",
@@ -709,7 +718,7 @@ async def verify(
             guild_id,
             user_id
         )
-        await interaction.response.send_message(
+        await interaction.edit_original_response(
             embed=bigv_ui.status_embed(
                 "error",
                 "The role couldn't be assigned",
@@ -720,7 +729,7 @@ async def verify(
         )
         return
     await delete_pending_verification(guild_id,user_id)
-    await interaction.response.send_message(
+    await interaction.edit_original_response(
         embed=bigv_ui.status_embed(
             "success",
             "Verification complete",
@@ -730,6 +739,56 @@ async def verify(
         allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
     )
 
+def build_verification_image(code: str) -> io.BytesIO:
+    width, height = 260, 100
+    image = Image.new("RGB", (width, height), (245, 247, 255))
+    draw = ImageDraw.Draw(image)
+
+    try:
+        font = ImageFont.truetype("arial.ttf", 42)
+    except OSError:
+        font = ImageFont.load_default()
+
+    # Light noise lines
+    for _ in range(5):
+        x1 = random.randint(0, width)
+        y1 = random.randint(0, height)
+        x2 = random.randint(0, width)
+        y2 = random.randint(0, height)
+        draw.line((x1, y1, x2, y2), fill=(180, 190, 220), width=2)
+
+    # Draw digits
+    x = 20
+    for digit in code:
+        y = random.randint(20, 30)
+        draw.text(
+            (x, y),
+            digit,
+            fill=(30, 40, 90),
+            font=font
+        )
+        x += 36
+
+    # Small random dots
+    for _ in range(120):
+        draw.point(
+            (
+                random.randint(0, width - 1),
+                random.randint(0, height - 1)
+            ),
+            fill=random.choice([
+                (170, 180, 210),
+                (80, 100, 235),
+                (30, 40, 90)
+            ])
+        )
+
+    image = image.filter(ImageFilter.SMOOTH)
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
 
 ## Repair Role
 async def repair_guild_setup(guild):

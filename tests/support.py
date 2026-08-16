@@ -54,6 +54,7 @@ def not_found():
 class FakeResponse:
     def __init__(self):
         self.send_message: Any = AsyncMock()
+        self.defer: Any = AsyncMock()
 
 
 class FakeUser:
@@ -71,6 +72,7 @@ class FakeInteraction:
         self.guild_id = guild.id if guild is not None else None
         self.user = user or FakeUser()
         self.response = FakeResponse()
+        self.edit_original_response: Any = AsyncMock()
 
 
 class FakeRole:

@@ -115,33 +115,39 @@ def status_embed(state, title, description, guild=None):
     return embed
 
 
-def verification_dm_embed(guild, code, expires_at):
+def verification_dm_embed(guild, expires_at):
     embed = discord.Embed(
         title=f"{emoji('shield')} BigV verification",
         description=(
-            f"Use this one-time code to verify your access to "
+            f"Use the 6-digit code shown in the image below to verify your access to "
             f"**{guild_name(guild)}**."
         ),
         colour=BRAND_COLOR,
     )
-    embed.add_field(
-        name=f"{emoji('code')} Your private code",
-        value=f"## ||`{code}`||",
-        inline=False,
-    )
+
     embed.add_field(
         name=f"{emoji('verify')} Complete verification",
-        value="Run `/verify` in this DM and enter the code above.",
+        value="Run `/verify` in this DM and enter the code shown in the image.",
         inline=False,
     )
+
     embed.add_field(
         name=f"{emoji('lock')} Expires",
         value=f"<t:{expires_at}:R>",
         inline=False,
     )
+    embed.add_field(
+        name=f"{emoji('code')} Your private code : ",
+        value="",
+        inline=True,
+    )
+    embed.set_image(url="attachment://bigv_verification.png")
+
     embed.set_footer(text="Private • One-time • Never share this code")
+
     if guild.icon is not None:
         embed.set_thumbnail(url=guild.icon.url)
+
     return embed
 
 
