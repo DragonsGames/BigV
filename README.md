@@ -2,7 +2,7 @@
 
 > A modern, open-source Discord verification bot built to make server verification simple, secure, resilient, and pleasant to use.
 
-BigV is a multi-server Discord verification bot built with **Python**, **discord.py**, and **SQLite**. It creates a dedicated verification experience for a server, sends members a private one-time code through DMs, verifies that code through `/verify`, and assigns a configurable `Verified` role.
+BigV is a multi-server Discord verification bot built with **Python**, **discord.py**, **SQLite**, and **Pillow**. It creates a dedicated verification experience for a server, sends members a private one-time code through DMs, verifies that code through `/verify`, and assigns a configurable `Verified` role.
 
 The project started as a learning project after finishing CS50. I wanted to build something larger than a tutorial bot and use it to learn how a real Discord application works: async programming, slash commands, persistent components, permissions, databases, error handling, self-healing behavior, logging, UI/UX, and deployment.
 
@@ -17,7 +17,7 @@ BigV is intended to be **open source** so other developers can inspect it, learn
 - Dedicated `#bigv-verification` channel
 - Automatically created `Verified` role
 - Persistent Discord verification button
-- Private 6-digit verification codes sent through DMs
+- Private 6-digit verification codes sent as generated PNG images through DMs
 - SHA-256 hashed codes in the database
 - 10-minute code expiration
 - Maximum of 5 failed attempts
@@ -97,7 +97,7 @@ If the code is valid and has not expired, BigV assigns the `Verified` role in th
 3. A member presses **Send verification code**.
 4. BigV creates a random six-digit code.
 5. Only a SHA-256 hash of the code is stored in SQLite.
-6. The real code is sent privately to the member through DM.
+6. The real code is rendered with Pillow and sent privately as an image through DM.
 7. The member runs `/verify <code>` in their DM with BigV.
 8. BigV checks the code, expiration time, server, member, role, and permissions.
 9. If verification succeeds, BigV assigns the `Verified` role.
@@ -616,6 +616,7 @@ Built as a learning-driven open-source project after CS50.
 - Discord and the Discord API
 - `discord.py`
 - `aiosqlite`
+- Pillow
 - Python
 - CS50
 - Google Material Icons / Material Symbols where used in BigV's custom visual asset family
