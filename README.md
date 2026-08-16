@@ -490,6 +490,7 @@ Third-party visual assets may have their own licenses. See:
 ```text
 assets/THIRD_PARTY.md
 assets/licenses/
+```
 
 ---
 
