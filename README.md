@@ -21,6 +21,7 @@ BigV is intended to be **open source** so other developers can inspect it, learn
 - SHA-256 hashed codes in the database
 - 10-minute code expiration
 - Maximum of 5 failed attempts
+- Attempt limits enforced across simultaneous multi-server requests
 - Leading-zero code support
 - Already-verified detection
 - Closed-DM handling
@@ -499,6 +500,7 @@ The core verification workflow is implemented, including:
 - UI/UX
 - custom application emojis
 - help/onboarding
+- automated regression tests
 
 Before a stable `v1.0.0` release, the project should complete its live end-to-end Discord testing and deployment validation.
 
@@ -544,9 +546,9 @@ python -m unittest discover -s tests -v
 
 The tests cover:
 
-- SQLite initialization, settings, pending challenges, expiration, and attempt tracking
+- SQLite initialization, settings, pending challenges, expiration, and multi-server attempt tracking
 - setup permissions, resource creation, rollback, and channel lockdown
-- verification success, invalid and expired codes, role assignment, and DM behavior
+- verification success, invalid and expired codes, role assignment, DM behavior, and controlled database/API failures
 - deleted role, channel, and message repair paths
 - periodic repair and cleanup tasks
 - persistent views, custom emoji fallbacks, semantic UI states, and safe mentions
