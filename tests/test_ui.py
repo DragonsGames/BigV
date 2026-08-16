@@ -1,4 +1,7 @@
+# ruff: noqa: I001
+
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from tests.support import FakeGuild, FakeRole, bot, discord, http_exception
@@ -19,9 +22,10 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         ]
 
     async def test_application_emojis_are_preferred_by_semantic_key(self):
-        client = type("Client", (), {})()
-        client.fetch_application_emojis = AsyncMock(
-            return_value=self.custom_emojis()
+        client = SimpleNamespace(
+            fetch_application_emojis=AsyncMock(
+                return_value=self.custom_emojis()
+            )
         )
 
         await ui.load_application_emojis(client)
@@ -33,8 +37,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
     async def test_missing_emoji_logs_warning_and_uses_unicode_fallback(self):
         emojis = self.custom_emojis()
         emojis = [item for item in emojis if item.name != "bigv_warning"]
-        client = type("Client", (), {})()
-        client.fetch_application_emojis = AsyncMock(return_value=emojis)
+        client = SimpleNamespace(
+            fetch_application_emojis=AsyncMock(return_value=emojis)
+        )
 
         with self.assertLogs("bigv.ui", level="WARNING") as captured:
             await ui.load_application_emojis(client)
@@ -43,9 +48,10 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bigv_warning", "\n".join(captured.output))
 
     async def test_fetch_failure_keeps_startup_usable(self):
-        client = type("Client", (), {})()
-        client.fetch_application_emojis = AsyncMock(
-            side_effect=http_exception()
+        client = SimpleNamespace(
+            fetch_application_emojis=AsyncMock(
+                side_effect=http_exception()
+            )
         )
 
         with self.assertLogs("bigv.ui", level="WARNING"):
@@ -102,12 +108,12 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         )
         help_embed = ui.help_embed(guild)
         help_text = "\n".join(
-            [help_embed.title, help_embed.description]
+            [help_embed.title or "", help_embed.description or ""]
             + [f"{field.name}\n{field.value}" for field in help_embed.fields]
         )
         dm_embed = ui.verification_dm_embed(guild, "001234", 1893456000)
         dm_text = "\n".join(
-            [dm_embed.title, dm_embed.description]
+            [dm_embed.title or "", dm_embed.description or ""]
             + [f"{field.name}\n{field.value}" for field in dm_embed.fields]
         )
 
@@ -130,7 +136,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         for name in ("bigv_shield", "bigv_code", "bigv_verify", "bigv_lock"):
             self.assertIn(name, dm_text)
         self.assertIn("<t:1893456000:R>", dm_text)
-        self.assertTrue(all(len(field.value) <= 1024 for field in help_embed.fields))
+        self.assertTrue(
+            all(len(field.value or "") <= 1024 for field in help_embed.fields)
+        )
         self.assertLessEqual(len(help_embed), 6000)
 
     def test_status_colors_and_icons_are_semantic(self):
@@ -142,9 +150,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         warning = ui.status_embed("warning", "Retry", "Retry")
         error = ui.status_embed("error", "Failed", "Failed")
 
-        self.assertIn("bigv_success", success.title)
-        self.assertIn("bigv_warning", warning.title)
-        self.assertIn("bigv_error", error.title)
+        self.assertIn("bigv_success", success.title or "")
+        self.assertIn("bigv_warning", warning.title or "")
+        self.assertIn("bigv_error", error.title or "")
         self.assertEqual(success.colour, ui.SUCCESS_COLOR)
         self.assertEqual(warning.colour, ui.WARNING_COLOR)
         self.assertEqual(error.colour, ui.ERROR_COLOR)

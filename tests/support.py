@@ -1,24 +1,26 @@
+import importlib
 import os
 import sys
 import types
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
-
 
 os.environ.setdefault("DISCORD_TOKEN", "unit-test-token")
 
 try:
-    import audioop  # noqa: F401
+    importlib.import_module("audioop")
 except ModuleNotFoundError:
     audioop = types.ModuleType("audioop")
-    audioop.error = Exception
+    audioop.__dict__["error"] = Exception
     sys.modules["audioop"] = audioop
 
-import discord
+
+discord: Any = importlib.import_module("discord")
 
 
 with patch.object(discord.Client, "run", return_value=None):
-    import bot
+    bot: Any = importlib.import_module("bot")
 
 
 class FakeHTTPResponse:
@@ -51,13 +53,13 @@ def not_found():
 
 class FakeResponse:
     def __init__(self):
-        self.send_message = AsyncMock()
+        self.send_message: Any = AsyncMock()
 
 
 class FakeUser:
     def __init__(self, user_id=200):
         self.id = user_id
-        self.send = AsyncMock()
+        self.send: Any = AsyncMock()
 
     def __str__(self):
         return f"test-user-{self.id}"
@@ -77,6 +79,7 @@ class FakeRole:
         self.mention = f"<@&{role_id}>"
         self._assignable = assignable
         self.delete = AsyncMock()
+        self.guild: Any = None
 
     def is_assignable(self):
         return self._assignable
@@ -95,6 +98,8 @@ class FakeChannel:
         self.delete = AsyncMock()
         self.fetch_message = AsyncMock()
         self.set_permissions = AsyncMock()
+        self.guild: Any = None
+        self.overwrites_for: Any = None
 
 
 class FakeGuild:
@@ -132,4 +137,3 @@ class FakeGuild:
         if self._channel is not None and self._channel.id == channel_id:
             return self._channel
         return None
-

@@ -119,13 +119,16 @@ class VerifyActionRow(discord.ui.ActionRow):
         interaction: discord.Interaction,
         button: discord.ui.Button
     ):
+        guild = interaction.guild
+        if guild is None:
+            return
         number = secrets.randbelow(1_000_000)
         code = f"{number:06d}"
         code_hash = hashlib.sha256(
             code.encode()
         ).hexdigest()
         expires_at = int(time.time()) + 600
-        guild_id = interaction.guild.id
+        guild_id = guild.id
         user_id = interaction.user.id
         try:
             await save_pending_verification(
@@ -145,7 +148,7 @@ class VerifyActionRow(discord.ui.ActionRow):
                     "error",
                     "Verification data is unavailable",
                     "BigV couldn't access its verification data. Please try again shortly.",
-                    interaction.guild,
+                    guild,
                 ),
                 ephemeral=True,
                 allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
@@ -154,7 +157,7 @@ class VerifyActionRow(discord.ui.ActionRow):
         try:
             await interaction.user.send(
                 embed=bigv_ui.verification_dm_embed(
-                    interaction.guild,
+                    guild,
                     code,
                     expires_at,
                 ),
@@ -172,7 +175,7 @@ class VerifyActionRow(discord.ui.ActionRow):
                     "warning",
                     "I couldn't reach your DMs",
                     "Enable direct messages for this server, then press **Verify** again.",
-                    interaction.guild,
+                    guild,
                 ),
                 ephemeral=True,
                 allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
@@ -241,8 +244,10 @@ async def send_verification_panel(guild, channel, role):
 async def setup(
     interaction: discord.Interaction
 ):
-    guild_id=interaction.guild.id
     guild = interaction.guild
+    if guild is None:
+        return
+    guild_id=guild.id
     try:
         settings = await get_guild_settings(guild_id)
     except aiosqlite.Error:
@@ -266,6 +271,7 @@ async def setup(
     if  settings is None:
         ## Error Handling For permissions 
         bot_member = guild.me
+        assert bot_member is not None
         if not bot_member.guild_permissions.manage_roles:
             logger.warning(
                 "Setup blocked for guild %s: BigV lacks Manage Roles",
@@ -377,7 +383,6 @@ async def setup(
                         verification_channel.id,
                         guild_id
                     )
-                    pass
             if role is not None:
                 try:
                     await role.delete(
@@ -389,7 +394,6 @@ async def setup(
                         role.id,
                         guild_id
                     )
-                    pass
             await interaction.response.send_message(
                 embed=bigv_ui.status_embed(
                     "error",
@@ -516,6 +520,8 @@ async def verify(
                 guild_id,
                 user_id
             )
+            if updated_verification is None:
+                continue
             updated_verifications.append(updated_verification)
             if updated_verification['attempts'] >= 5:
                 await delete_pending_verification(guild_id, user_id)
@@ -605,9 +611,43 @@ async def verify(
         )
         return
 
+    if settings is None:
+        logger.error(
+            "Verification settings are unavailable for guild %s user %s",
+            guild_id,
+            user_id
+        )
+        await interaction.response.send_message(
+            embed=bigv_ui.status_embed(
+                "error",
+                "The server isn't ready yet",
+                "BigV couldn't prepare the verification setup. Your code is still valid, so try again shortly.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+        return
+
     role_id = settings["verified_role_id"]
 
     role = guild.get_role(role_id)
+    if role is None:
+        logger.error(
+            "Verification role %s is unavailable in guild %s for user %s",
+            role_id,
+            guild_id,
+            user_id
+        )
+        await interaction.response.send_message(
+            embed=bigv_ui.status_embed(
+                "error",
+                "The server isn't ready yet",
+                "BigV couldn't prepare the verification setup. Your code is still valid, so try again shortly.",
+                guild,
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+        return
     try:
         member = await guild.fetch_member(user_id)
     except discord.NotFound:
@@ -762,7 +802,6 @@ async def on_raw_message_delete(payload):
             "Failed to repair verification message after deletion for guild %s",
             guild.id
         )
-        pass
 
 
 @client.event
@@ -784,7 +823,6 @@ async def on_raw_bulk_message_delete(payload):
             "Failed to repair verification message after bulk deletion for guild %s",
             guild.id
         )
-        pass
 
 
 ## Role Deletion detection 
@@ -801,7 +839,6 @@ async def on_guild_role_delete(role):
             "Failed to repair configuration after role deletion for guild %s",
             role.guild.id
         )
-        pass
 
 #delete anything else but bots message 
 @client.event
@@ -820,7 +857,6 @@ async def on_message(message):
             message.channel.id,
             message.guild.id
         )
-        pass
 #missing event: detect channel deletion
 @client.event
 async def on_guild_channel_delete(channel):
@@ -837,7 +873,6 @@ async def on_guild_channel_delete(channel):
             "Failed to repair configuration after channel deletion for guild %s",
             channel.guild.id
         )
-        pass
 
 #channel lock helper
 async def lock_verification_channel(guild, channel):

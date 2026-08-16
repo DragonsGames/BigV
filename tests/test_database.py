@@ -34,10 +34,12 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def test_guild_settings_insert_update_and_read_are_committed(self):
         await database.save_guild_settings(1, 2, 3, 4)
         first = await database.get_guild_settings(1)
+        assert first is not None
         self.assertEqual(tuple(first), (1, 2, 3, 4))
 
         await database.save_guild_settings(1, 20, 30, 40)
         updated = await database.get_guild_settings(1)
+        assert updated is not None
         self.assertEqual(tuple(updated), (1, 20, 30, 40))
 
     async def test_pending_challenge_resets_attempts_when_replaced(self):
@@ -48,6 +50,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         await database.save_pending_verification(1, 10, second_hash, 200)
 
         row = await database.get_pending_verification(1, 10)
+        assert row is not None
         self.assertEqual(row["code_hash"], second_hash)
         self.assertEqual(row["expires_at"], 200)
         self.assertEqual(row["attempts"], 0)
@@ -63,6 +66,7 @@ class DatabaseTests(unittest.IsolatedAsyncioTestCase):
         await database.save_pending_verification(1, 10, "hash", 100)
         await database.increment_verification_attempts(1, 10)
         row = await database.get_pending_verification(1, 10)
+        assert row is not None
         self.assertEqual(row["attempts"], 1)
 
         await database.delete_pending_verification(1, 10)
