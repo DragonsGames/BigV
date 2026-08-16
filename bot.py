@@ -96,7 +96,11 @@ async def help_command(interaction: discord.Interaction):
 @tasks.loop(hours=1)
 async def cleanup_expired_verifications():
     current_time = int(time.time())
-    await delete_expired_verifications(current_time)
+    try:
+        await delete_expired_verifications(current_time)
+    except aiosqlite.Error:
+        logger.exception("Expired verification cleanup failed")
+        return
     logger.info("Cleaned expired verification challenges.")
 
 
@@ -123,12 +127,30 @@ class VerifyActionRow(discord.ui.ActionRow):
         expires_at = int(time.time()) + 600
         guild_id = interaction.guild.id
         user_id = interaction.user.id
-        await save_pending_verification(
-            guild_id,
-            user_id,
-            code_hash,
-            expires_at,
-        )
+        try:
+            await save_pending_verification(
+                guild_id,
+                user_id,
+                code_hash,
+                expires_at,
+            )
+        except aiosqlite.Error:
+            logger.exception(
+                "Failed to save pending verification for guild %s user %s",
+                guild_id,
+                user_id
+            )
+            await interaction.response.send_message(
+                embed=bigv_ui.status_embed(
+                    "error",
+                    "Verification data is unavailable",
+                    "BigV couldn't access its verification data. Please try again shortly.",
+                    interaction.guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+            )
+            return
         try:
             await interaction.user.send(
                 embed=bigv_ui.verification_dm_embed(
@@ -150,6 +172,24 @@ class VerifyActionRow(discord.ui.ActionRow):
                     "warning",
                     "I couldn't reach your DMs",
                     "Enable direct messages for this server, then press **Verify** again.",
+                    interaction.guild,
+                ),
+                ephemeral=True,
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+            )
+            return
+        except discord.HTTPException:
+            logger.exception(
+                "Discord failed to deliver verification DM for guild %s user %s",
+                guild_id,
+                user_id
+            )
+            await delete_pending_verification(guild_id, user_id)
+            await interaction.response.send_message(
+                embed=bigv_ui.status_embed(
+                    "error",
+                    "The code couldn't be delivered",
+                    "Discord couldn't deliver your verification DM. Please try again shortly.",
                     interaction.guild,
                 ),
                 ephemeral=True,
@@ -203,7 +243,24 @@ async def setup(
 ):
     guild_id=interaction.guild.id
     guild = interaction.guild
-    settings = await get_guild_settings(guild_id)
+    try:
+        settings = await get_guild_settings(guild_id)
+    except aiosqlite.Error:
+        logger.exception(
+            "Failed to load setup settings for guild %s",
+            guild_id
+        )
+        await interaction.response.send_message(
+            embed=bigv_ui.status_embed(
+                "error",
+                "Verification data is unavailable",
+                "BigV couldn't access its verification data. Please try again shortly.",
+                guild,
+            ),
+            ephemeral=True,
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+        return
     role = None
     verification_channel = None
     if  settings is None:
@@ -415,7 +472,22 @@ async def verify(
     code: str
 ):
     user_id = interaction.user.id
-    pending = await get_pending_verifications(user_id)
+    try:
+        pending = await get_pending_verifications(user_id)
+    except aiosqlite.Error:
+        logger.exception(
+            "Failed to load pending verifications for user %s",
+            user_id
+        )
+        await interaction.response.send_message(
+            embed=bigv_ui.status_embed(
+                "error",
+                "Verification data is unavailable",
+                "BigV couldn't access its verification data. Please try again shortly.",
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+        return
     if not pending:
         await interaction.response.send_message(
             embed=bigv_ui.status_embed(
@@ -435,24 +507,34 @@ async def verify(
             matched_verification = verification
             break
     if matched_verification is None:
-        if len(pending) == 1 :
-            guild_id = pending[0]['guild_id']
+        updated_verifications = []
+        pending_challenges_remain = False
+        for verification in pending:
+            guild_id = verification['guild_id']
             await increment_verification_attempts(guild_id, user_id)
-            verification = await get_pending_verification(
-            guild_id,
-            user_id
+            updated_verification = await get_pending_verification(
+                guild_id,
+                user_id
             )
-            if verification['attempts'] >= 5:
-                await delete_pending_verification(guild_id,user_id)
-                await interaction.response.send_message(
-                    embed=bigv_ui.status_embed(
-                        "warning",
-                        "Too many incorrect attempts",
-                        "This request was cancelled. Return to the server and press **Verify** for a new code.",
-                    ),
-                    allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
-                )
-                return
+            updated_verifications.append(updated_verification)
+            if updated_verification['attempts'] >= 5:
+                await delete_pending_verification(guild_id, user_id)
+            else:
+                pending_challenges_remain = True
+
+        if not pending_challenges_remain:
+            await interaction.response.send_message(
+                embed=bigv_ui.status_embed(
+                    "warning",
+                    "Too many incorrect attempts",
+                    "This request was cancelled. Return to the server and press **Verify** for a new code.",
+                ),
+                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+            )
+            return
+
+        if len(updated_verifications) == 1:
+            verification = updated_verifications[0]
             remaining = 5 - verification["attempts"]
             await interaction.response.send_message(
                 embed=bigv_ui.status_embed(
@@ -463,16 +545,15 @@ async def verify(
                 allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
             )
             return
-        else:
-            await interaction.response.send_message(
-                embed=bigv_ui.status_embed(
-                    "warning",
-                    "That code doesn't match",
-                    "You have requests from multiple servers. Use the code from the DM for the server you want to join.",
-                ),
-                allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
-            )
-            return
+        await interaction.response.send_message(
+            embed=bigv_ui.status_embed(
+                "warning",
+                "That code doesn't match",
+                "You have requests from multiple servers. Use the code from the DM for the server you want to join.",
+            ),
+            allowed_mentions=bigv_ui.SAFE_ALLOWED_MENTIONS,
+        )
+        return
     if int(time.time()) > matched_verification['expires_at']:
         await delete_pending_verification(matched_verification["guild_id"],user_id)
         await interaction.response.send_message(
