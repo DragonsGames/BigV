@@ -29,8 +29,15 @@ The six-digit verification code is rendered as an image and sent privately throu
 
 - Multi-server support — no hardcoded guild ID
 - `/setup` command for server administrators
+- Duplicate-safe setup, including concurrent administrator requests
+- `/unsetup confirm:true` for safe removal of tracked verification resources
+- `/forceverify` for administrator-assisted verification
+- `/config` for read-only configuration inspection
+- Optional `/log` audit logging controls
 - Dedicated `#bigv-verification` channel
 - Automatically created `Verified` role
+- Verified role displayed separately in the member list
+- Verification channel hidden from verified members while remaining visible to staff
 - Persistent Discord verification button
 - Private 6-digit verification codes sent as generated PNG images through DMs
 - SHA-256 hashed codes in the database
@@ -87,9 +94,35 @@ Requirements:
 
 BigV creates:
 
-- a `Verified` role
+- a hoisted `Verified` role
 - a `#bigv-verification` channel
 - a persistent verification panel
+
+Repeated or concurrent `/setup` calls reuse and repair the stored configuration instead of creating another BigV role, channel, or panel.
+
+### `/unsetup confirm:true`
+
+Safely removes BigV verification from the current server.
+
+Only the role, channel, and message IDs stored in BigV's guild configuration are removed. BigV never deletes resources by matching names. Pending verification requests for that guild are also removed, optional server logging is disabled, and historical log channels/messages are preserved.
+
+### `/forceverify user:@member`
+
+Allows an administrator to assign the configured Verified role without generating a CAPTCHA or sending a DM. A pending challenge for that member in the current guild is removed; challenges from other guilds are not changed.
+
+### `/config`
+
+Displays the current verification resource IDs and live status, role hoist state, verification panel status, logging state, self-healing status, and channel visibility behavior. This command is read-only and does not repair or reconfigure the server.
+
+### `/log action:<enable|disable|status>`
+
+Controls optional BigV audit logging:
+
+- `enable` creates or reuses a private `BigV` category and `#bigv-logs` channel
+- `disable` stops new Discord audit messages without deleting the channel or its history
+- `status` reports the stored logging state without changing it
+
+Logging is never enabled automatically by `/setup`. If the logging channel is deleted, BigV disables that destination rather than self-healing it; run `/log action:enable` to recreate it explicitly.
 
 ### `/verify <code>`
 
@@ -116,7 +149,8 @@ If the code is valid and has not expired, BigV assigns the `Verified` role in th
 7. The member runs `/verify <code>` in their DM with BigV.
 8. BigV checks the code, expiration time, server, member, role, and permissions.
 9. If verification succeeds, BigV assigns the `Verified` role.
-10. The pending verification challenge is deleted.
+10. The verification channel disappears for that verified member.
+11. The pending verification challenge is deleted.
 
 Codes expire after **10 minutes**.
 
@@ -139,6 +173,10 @@ BigV can recreate the missing resource and save the new IDs to the database.
 The bot also runs a periodic repair pass so missed/offline deletion events can still be recovered later.
 
 One failing guild does not stop the periodic repair process for the other guilds.
+
+Intentional removal through `/unsetup confirm:true` is protected by a guild-scoped lifecycle lock and teardown state, so deletion events and the periodic task cannot recreate resources during teardown. The same lock prevents concurrent `/setup` calls from creating duplicate BigV resources.
+
+Self-healing applies only to tracked verification resources. Optional audit-log categories and channels are not recreated automatically.
 
 ---
 
@@ -258,6 +296,8 @@ The user running `/setup` must have Administrator permission.
 
 After installation, make sure BigV's bot role is positioned high enough in the server role list to assign the `Verified` role.
 
+Unverified members can view `#bigv-verification` but cannot send normal messages there. After receiving the configured Verified role, the channel is hidden from them. Administrators and roles with meaningful Discord management or moderation permissions retain visibility; BigV does not identify staff by role name.
+
 ---
 
 ## Custom BigV application emojis
@@ -345,6 +385,8 @@ The database stores information such as:
 - hashed verification codes
 - expiration timestamps
 - failed-attempt counts
+- optional guild audit logging state
+- configured audit category and channel IDs
 
 The database file is:
 
@@ -355,6 +397,8 @@ BigV.db
 and should remain ignored by Git.
 
 Verification codes are **not stored in plaintext**.
+
+Database initialization uses additive `CREATE TABLE IF NOT EXISTS` statements, so existing `BigV.db` files are upgraded without a destructive migration.
 
 ---
 
@@ -371,6 +415,9 @@ BigV intentionally follows several basic security practices:
 - Codes are sent only through private DMs
 - Codes are not written to logs
 - Code hashes are not written to logs
+- Discord audit messages never include CAPTCHA plaintext or hashes
+- Audit messages use disabled mentions to avoid pinging users, roles, or everyone
+- `/unsetup` deletes only IDs tracked in BigV's guild configuration
 - Successful challenges are consumed
 - Failed Discord role assignment does not incorrectly consume a still-valid challenge
 - Setup performs rollback when possible if configuration fails partway through
@@ -393,6 +440,8 @@ BigV handles expected failures including:
 - setup failures
 - rollback cleanup failures
 - repair failures
+- concurrent setup/teardown operations
+- optional audit channel failures
 
 Structured Python logging is used so operational failures can be diagnosed without exposing verification secrets.
 
@@ -515,6 +564,8 @@ The core verification workflow is complete, including:
 
 BigV is currently in maintenance and incremental development. Future releases will focus on reliability, accessibility, administrator configuration, and deployment improvements.
 
+The administrator controls and optional audit logging documented here are incremental post-v1.0.0 development. They are not presented as a released `v1.1.0` until a future release is formally created.
+
 ---
 
 ## Contributing
@@ -557,12 +608,14 @@ python -m unittest discover -s tests -v
 
 The tests cover:
 
-- SQLite initialization, settings, pending challenges, expiration, and multi-server attempt tracking
-- setup permissions, resource creation, rollback, and channel lockdown
+- SQLite initialization, settings, audit logging, teardown cleanup, pending challenges, expiration, and multi-server isolation
+- setup permissions, duplicate/concurrent setup prevention, resource creation, rollback, role hoisting, and channel visibility
 - verification success, invalid and expired codes, role assignment, DM behavior, and controlled database/API failures
-- deleted role, channel, and message repair paths
+- administrator unsetup, force verification, configuration inspection, and audit logging commands
+- deleted role, channel, and message repair paths, including intentional teardown protection
+- optional logging enable/disable/status, idempotency, privacy, and deleted-channel behavior
 - periodic repair and cleanup tasks
-- persistent views, custom emoji fallbacks, semantic UI states, and safe mentions
+- persistent views, help/support content, custom emoji fallbacks, semantic UI states, and safe mentions
 
 Database tests use temporary directories, and Discord behavior is tested with isolated fakes and mocks. Running the automated suite does not modify the project's local `BigV.db` or connect the bot to Discord.
 
@@ -595,6 +648,11 @@ Important resilience tests include:
 - deleted Verified role
 - restart + persistent button
 - missing custom application emoji fallback
+- concurrent `/setup` calls
+- verified-member channel visibility
+- `/unsetup` during deletion events
+- deleted optional logging channel
+- audit delivery failure
 
 ---
 
@@ -605,11 +663,19 @@ Potential future work includes:
 - expanding regression coverage as features change
 - production deployment documentation
 - easier installation/deployment
-- additional administrator configuration
+- additional administrator configuration options
 - more advanced observability
 - accessibility refinements
 
 The goal is to keep BigV focused: a reliable verification bot, not an unnecessarily large moderation suite.
+
+---
+
+## Support
+
+For setup help, bug reports, and project questions, join the official BigV support server:
+
+https://discord.gg/MBRY3QdCvk
 
 ---
 

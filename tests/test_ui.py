@@ -23,9 +23,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_application_emojis_are_preferred_by_semantic_key(self):
         client = SimpleNamespace(
-            fetch_application_emojis=AsyncMock(
-                return_value=self.custom_emojis()
-            )
+            fetch_application_emojis=AsyncMock(return_value=self.custom_emojis())
         )
 
         await ui.load_application_emojis(client)
@@ -49,9 +47,7 @@ class UITests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_failure_keeps_startup_usable(self):
         client = SimpleNamespace(
-            fetch_application_emojis=AsyncMock(
-                side_effect=http_exception()
-            )
+            fetch_application_emojis=AsyncMock(side_effect=http_exception())
         )
 
         with self.assertLogs("bigv.ui", level="WARNING"):
@@ -81,7 +77,9 @@ class UITests(unittest.IsolatedAsyncioTestCase):
                 "load_application_emojis",
                 side_effect=load_emojis,
             ),
-            patch.object(client, "add_view", side_effect=lambda view: order.append("view")),
+            patch.object(
+                client, "add_view", side_effect=lambda view: order.append("view")
+            ),
             patch.object(client.tree, "sync", side_effect=sync_commands),
             patch.object(bot.repair_configurations, "start"),
             patch.object(bot.cleanup_expired_verifications, "start"),
@@ -99,11 +97,11 @@ class UITests(unittest.IsolatedAsyncioTestCase):
         role = FakeRole()
         view = bot.VerifyView(guild, role)
         button = next(
-            item for item in view.walk_children()
-            if isinstance(item, discord.ui.Button)
+            item for item in view.walk_children() if isinstance(item, discord.ui.Button)
         )
         panel_text = "\n".join(
-            item.content for item in view.walk_children()
+            item.content
+            for item in view.walk_children()
             if isinstance(item, discord.ui.TextDisplay)
         )
         help_embed = ui.help_embed(guild)
@@ -129,10 +127,20 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             "bigv_role",
         ):
             self.assertIn(name, panel_text)
-        for command in ("/help", "/ping", "/setup", "/verify"):
+        for command in (
+            "/help",
+            "/ping",
+            "/setup",
+            "/verify",
+            "/unsetup",
+            "/forceverify",
+            "/config",
+            "/log",
+        ):
             self.assertIn(command, help_text)
-        for phrase in ("No DM?", "Code expired?", "Admin setup"):
+        for phrase in ("No DM?", "Code expired?", "Administrator tools"):
             self.assertIn(phrase, help_text)
+        self.assertIn("https://discord.gg/MBRY3QdCvk", help_text)
         for name in ("bigv_shield", "bigv_code", "bigv_verify", "bigv_lock"):
             self.assertIn(name, dm_text)
         self.assertIn("<t:1893456000:R>", dm_text)
@@ -140,6 +148,43 @@ class UITests(unittest.IsolatedAsyncioTestCase):
             all(len(field.value or "") <= 1024 for field in help_embed.fields)
         )
         self.assertLessEqual(len(help_embed), 6000)
+
+    def test_configuration_embed_reports_resources_without_secrets(self):
+        guild = FakeGuild()
+        role = FakeRole(hoist=True)
+        channel = SimpleNamespace(id=400, mention="<#400>")
+        category = SimpleNamespace(id=600, name="BigV")
+        log_channel = SimpleNamespace(id=700, mention="<#700>")
+        settings = {
+            "verified_role_id": role.id,
+            "verified_channel_id": channel.id,
+            "verification_message_id": 500,
+        }
+        logging_settings = {
+            "enabled": 1,
+            "log_category_id": category.id,
+            "log_channel_id": log_channel.id,
+        }
+
+        embed = ui.configuration_embed(
+            guild,
+            settings,
+            role,
+            channel,
+            "exists",
+            logging_settings,
+            category,
+            log_channel,
+        )
+        text = "\n".join(
+            [embed.title or "", embed.description or ""]
+            + [f"{field.name}\n{field.value}" for field in embed.fields]
+        )
+
+        for value in ("300", "400", "500", "Configured", "Hoisted: **yes**"):
+            self.assertIn(value, text)
+        for secret in ("DISCORD_TOKEN", "code_hash", ".env"):
+            self.assertNotIn(secret, text)
 
     def test_status_colors_and_icons_are_semantic(self):
         ui._application_emojis.update(

@@ -1,3 +1,5 @@
+"""Discord presentation helpers and centralized BigV branding."""
+
 import logging
 from pathlib import Path
 
@@ -5,6 +7,7 @@ import discord
 
 logger = logging.getLogger("bigv.ui")
 
+# Brand and semantic colors remain separate so status meaning stays clear.
 BRAND_BLUE = discord.Colour(0x2C6AF7)
 BRAND_COLOR = discord.Colour(0x5064EB)
 BRAND_VIOLET = discord.Colour(0x685EE3)
@@ -58,6 +61,7 @@ _missing_logo_warning_sent = False
 
 
 async def load_application_emojis(client):
+    """Load BigV application emojis, retaining Unicode fallbacks on failure."""
     _application_emojis.clear()
     try:
         emojis = await client.fetch_application_emojis()
@@ -70,9 +74,7 @@ async def load_application_emojis(client):
 
     expected_names = set(EMOJI_NAMES.values())
     _application_emojis.update(
-        (item.name, item)
-        for item in emojis
-        if item.name in expected_names
+        (item.name, item) for item in emojis if item.name in expected_names
     )
     logger.info(
         "Loaded %s of %s expected BigV application emoji(s).",
@@ -92,11 +94,13 @@ def emoji(key):
 
 
 def guild_name(guild):
+    """Return a display-safe guild name that cannot create mentions or Markdown."""
     name = guild.name if guild is not None else "this server"
     return discord.utils.escape_mentions(discord.utils.escape_markdown(name))
 
 
 def status_embed(state, title, description, guild=None):
+    """Build the shared semantic status presentation used by bot responses."""
     states = {
         "success": ("success", SUCCESS_COLOR),
         "warning": ("warning", WARNING_COLOR),
@@ -180,11 +184,13 @@ def help_embed(guild, logo_file=None):
         inline=False,
     )
     embed.add_field(
-        name=f"{emoji('shield')} Admin setup",
+        name=f"{emoji('shield')} Administrator tools",
         value=(
-            "Run `/setup` once in the server.\n"
-            f"{emoji('channel')} BigV creates and locks its verification channel.\n"
-            f"{emoji('role')} BigV creates the Verified role and posts the panel.\n"
+            "`/setup` — create or repair verification.\n"
+            "`/unsetup confirm:true` — safely remove tracked verification resources.\n"
+            "`/forceverify user:@member` — verify a member manually.\n"
+            "`/config` — inspect the current setup.\n"
+            "`/log action:enable|disable|status` — manage optional audit logs.\n"
             "Required: **Manage Roles**, **Manage Channels**, and **Manage Messages**."
         ),
         inline=False,
@@ -198,6 +204,11 @@ def help_embed(guild, logo_file=None):
         ),
         inline=False,
     )
+    embed.add_field(
+        name=f"{emoji('help')} Support",
+        value="Need help with BigV? [Join the official support server](https://discord.gg/MBRY3QdCvk).",
+        inline=False,
+    )
     embed.set_footer(text="BigV • Private codes expire after 10 minutes")
 
     if logo_file is not None:
@@ -207,7 +218,111 @@ def help_embed(guild, logo_file=None):
     return embed
 
 
+def configuration_embed(
+    guild,
+    settings,
+    role,
+    channel,
+    panel_status,
+    logging_settings,
+    log_category,
+    log_channel,
+):
+    """Present stored IDs alongside their current Discord resource status."""
+    embed = discord.Embed(
+        title=f"{emoji('shield')} BigV configuration",
+        description=f"Current status for **{guild_name(guild)}**.",
+        colour=BRAND_COLOR,
+    )
+    if settings is None:
+        embed.add_field(
+            name="Verification",
+            value="Not configured. Run `/setup` to create verification resources.",
+            inline=False,
+        )
+    else:
+        role_id = settings["verified_role_id"]
+        channel_id = settings["verified_channel_id"]
+        message_id = settings["verification_message_id"]
+        role_label = role.mention if role is not None else "Missing"
+        channel_label = channel.mention if channel is not None else "Missing"
+        hoisted = "yes" if role is not None and role.hoist else "no"
+        embed.add_field(
+            name="Verification",
+            value="Configured",
+            inline=False,
+        )
+        embed.add_field(
+            name=f"{emoji('role')} Verified role",
+            value=(
+                f"{role_label}\nID: `{role_id}`\n"
+                f"Exists: **{'yes' if role is not None else 'no'}**\nHoisted: **{hoisted}**"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name=f"{emoji('channel')} Verification channel",
+            value=(
+                f"{channel_label}\nID: `{channel_id}`\n"
+                f"Exists: **{'yes' if channel is not None else 'no'}**"
+            ),
+            inline=True,
+        )
+        embed.add_field(
+            name=f"{emoji('verify')} Verification panel",
+            value=f"ID: `{message_id}`\nStatus: **{panel_status}**",
+            inline=True,
+        )
+
+    logging_enabled = bool(logging_settings and logging_settings["enabled"])
+    log_category_text = (
+        log_category.name if log_category is not None else "Missing/not configured"
+    )
+    log_channel_text = log_channel.mention if log_channel is not None else "Unavailable"
+    embed.add_field(
+        name=f"{emoji('lock')} Logging",
+        value=(
+            f"Enabled: **{'yes' if logging_enabled else 'no'}**\n"
+            f"Category: **{log_category_text}**\n"
+            f"Channel: {log_channel_text}\n"
+            f"Channel status: **{'exists' if log_channel is not None else 'missing/not configured'}**"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name=f"{emoji('repair')} Self-healing",
+        value="Enabled for tracked verification resources.",
+        inline=True,
+    )
+    embed.add_field(
+        name=f"{emoji('shield')} Visibility",
+        value="Verified members are hidden from the verification channel; staff retain access.",
+        inline=True,
+    )
+    if guild.icon is not None:
+        embed.set_thumbnail(url=guild.icon.url)
+    return embed
+
+
+def logging_status_embed(guild, settings, category, channel):
+    """Present optional audit logging state without changing it."""
+    enabled = bool(settings and settings["enabled"])
+    category_text = category.name if category is not None else "Missing/not configured"
+    channel_text = channel.mention if channel is not None else "Missing/not configured"
+    return status_embed(
+        "success" if enabled and channel is not None else "neutral",
+        f"Audit logging is {'enabled' if enabled else 'disabled'}",
+        (
+            f"Category: **{category_text}**\n"
+            f"Channel: {channel_text}\n"
+            f"Channel exists: **{'yes' if channel is not None else 'no'}**"
+        ),
+        guild,
+    )
+
+
 def brand_logo_file():
+    """Open the canonical logo, or return None so callers can use a fallback."""
     global _missing_logo_warning_sent
 
     if not BRAND_LOGO_PATH.is_file():
@@ -229,6 +344,7 @@ def brand_logo_file():
 
 
 def verification_panel(guild, role, action_row, logo_file=None):
+    """Build the persistent Components V2 panel posted during setup and repair."""
     role_text = role.mention if role is not None else "the Verified role"
     heading = (
         f"## {emoji('shield')} You're almost in\n"
