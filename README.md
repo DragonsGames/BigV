@@ -479,7 +479,6 @@ You are welcome to:
 
 Please keep attribution and license terms in mind when redistributing the project or included third-party assets.
 
-```markdown
 ### License
 
 BigV is licensed under the **MIT License**.
