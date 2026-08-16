@@ -58,8 +58,10 @@ class FakeResponse:
 
 
 class FakeUser:
-    def __init__(self, user_id=200):
+    def __init__(self, user_id=200, administrator=True):
         self.id = user_id
+        self.mention = f"<@{user_id}>"
+        self.guild_permissions = SimpleNamespace(administrator=administrator)
         self.send: Any = AsyncMock()
 
     def __str__(self):
@@ -76,11 +78,35 @@ class FakeInteraction:
 
 
 class FakeRole:
-    def __init__(self, role_id=300, assignable=True):
+    def __init__(
+        self,
+        role_id=300,
+        assignable=True,
+        hoist=True,
+        name="Verified",
+        managed=False,
+        **permissions,
+    ):
         self.id = role_id
+        self.name = name
         self.mention = f"<@&{role_id}>"
+        self.hoist = hoist
+        self.managed = managed
+        permission_names = (
+            "administrator",
+            "manage_guild",
+            "manage_channels",
+            "manage_messages",
+            "moderate_members",
+            "kick_members",
+            "ban_members",
+        )
+        self.permissions = SimpleNamespace(
+            **{name: permissions.get(name, False) for name in permission_names}
+        )
         self._assignable = assignable
         self.delete = AsyncMock()
+        self.edit = AsyncMock()
         self.guild: Any = None
 
     def is_assignable(self):
@@ -88,20 +114,35 @@ class FakeRole:
 
 
 class FakeMember:
-    def __init__(self, roles=None):
+    def __init__(self, roles=None, user_id=200):
+        self.id = user_id
+        self.mention = f"<@{user_id}>"
         self.roles = list(roles or [])
         self.add_roles = AsyncMock()
 
 
 class FakeChannel:
-    def __init__(self, channel_id=400):
+    def __init__(self, channel_id=400, name="channel", category=None):
         self.id = channel_id
+        self.name = name
         self.mention = f"<#{channel_id}>"
+        self.category = category
+        self.category_id = category.id if category is not None else None
         self.delete = AsyncMock()
+        self.edit = AsyncMock()
+        self.send = AsyncMock()
         self.fetch_message = AsyncMock()
         self.set_permissions = AsyncMock()
         self.guild: Any = None
-        self.overwrites_for: Any = None
+        self.overwrites_for: Any = lambda target: discord.PermissionOverwrite()
+
+
+class FakeCategory:
+    def __init__(self, category_id=600, name="BigV"):
+        self.id = category_id
+        self.name = name
+        self.delete = AsyncMock()
+        self.guild: Any = None
 
 
 class FakeGuild:
@@ -113,11 +154,13 @@ class FakeGuild:
         manage_roles=True,
         manage_channels=True,
         manage_messages=True,
+        roles=None,
+        channels=None,
     ):
         self.id = guild_id
         self.name = "Test Guild"
         self.icon = None
-        self.default_role = object()
+        self.default_role = FakeRole(role_id=1, name="@everyone")
         permissions = SimpleNamespace(
             manage_roles=manage_roles,
             manage_channels=manage_channels,
@@ -126,16 +169,24 @@ class FakeGuild:
         self.me = SimpleNamespace(guild_permissions=permissions)
         self._role = role
         self._channel = channel
+        self.roles = [self.default_role, *(roles or [])]
+        if role is not None and role not in self.roles:
+            self.roles.append(role)
+        self.channels = list(channels or [])
+        if channel is not None and channel not in self.channels:
+            self.channels.append(channel)
         self.create_role = AsyncMock()
         self.create_text_channel = AsyncMock()
+        self.create_category = AsyncMock()
         self.fetch_member = AsyncMock()
 
+        for item in self.roles + self.channels:
+            item.guild = self
+
     def get_role(self, role_id):
-        if self._role is not None and self._role.id == role_id:
-            return self._role
-        return None
+        return next((role for role in self.roles if role.id == role_id), None)
 
     def get_channel(self, channel_id):
-        if self._channel is not None and self._channel.id == channel_id:
-            return self._channel
-        return None
+        return next(
+            (channel for channel in self.channels if channel.id == channel_id), None
+        )
