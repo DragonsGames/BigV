@@ -496,12 +496,12 @@ assets/licenses/
 
 ## Development status
 
-BigV is currently approaching its first stable release.
+BigV `v1.0.0` is the first stable release.
 
-The core verification workflow is implemented, including:
+The core verification workflow is complete, including:
 
 - setup
-- verification
+- CAPTCHA verification
 - persistence
 - resilience
 - logging
@@ -510,8 +510,10 @@ The core verification workflow is implemented, including:
 - custom application emojis
 - help/onboarding
 - automated regression tests
+- GitHub Actions CI
+- production Linux deployment
 
-Before a stable `v1.0.0` release, the project should complete its live end-to-end Discord testing and deployment validation.
+BigV is currently in maintenance and incremental development. Future releases will focus on reliability, accessibility, administrator configuration, and deployment improvements.
 
 ---
 
@@ -570,7 +572,7 @@ You can also validate Python syntax with:
 python -m compileall -q bot.py database.py ui.py tests
 ```
 
-Automated tests should be followed by a complete live Discord flow in a dedicated test server before release:
+Automated tests should still be paired with a complete live Discord flow in a dedicated test server when validating future releases or deployment changes:
 
 ```text
 /setup
@@ -600,7 +602,6 @@ Important resilience tests include:
 
 Potential future work includes:
 
-- CI validation
 - expanding regression coverage as features change
 - production deployment documentation
 - easier installation/deployment
